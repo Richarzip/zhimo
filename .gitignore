@@ -2,3 +2,4 @@
 .venv
 checkpoints/
 *.pth
+API.txt
