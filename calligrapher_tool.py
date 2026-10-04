@@ -20,7 +20,7 @@ def get_recognizer() -> CalligrapherRecognizer:
     global _recognizer
     if _recognizer is None:
         _recognizer = CalligrapherRecognizer(
-            model_path="./checkpoints/calligrapher_classifier.pth"
+            model_path="./checkpoints/convnext.pth"
         )
     return _recognizer
 
@@ -75,6 +75,7 @@ def identify_calligrapher(state: Annotated[dict, InjectedState]) -> dict:
         "top_k": top_k,
         "all_probabilities": result["all_probabilities"],
         "model_backbone": result["model_backbone"],
+        "evidence": result.get("evidence", {}),
     }
 
 
@@ -103,7 +104,7 @@ def analyze_calligraphy(state: Annotated[dict, InjectedState]) -> dict:
 
     # 直接识别原图
     recognizer = get_recognizer()
-    result = recognizer.recognize(image)
+    result = recognizer.predict_with_cam(image)
 
     # 综合可信度
     q = quality["overall"]
@@ -127,6 +128,7 @@ def analyze_calligraphy(state: Annotated[dict, InjectedState]) -> dict:
         "top_k": top_k,
         "quality": quality,
         "reliability": reliability,
+        "evidence": result.get("evidence", {}),
     }
 
 

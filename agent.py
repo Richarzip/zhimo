@@ -39,12 +39,14 @@ agent = create_agent(
         - high: 直接给结论
         - medium: 给结论但提醒"存在一定不确定性"
         - low: 不要强行下结论，建议用户提供更清晰的图片
-        6. 解释判断原因时，必须引用置信度、Top-K 数据或投票分布。
+        6. 解释判断原因时，必须引用:
+           - analyze_calligraphy 返回的置信度和 Top-K 数据
+           - evidence.attention_note（如果存在），说明"模型关注了哪些区域", 要针对这部分区域的笔画进行细致化的分析
         7. 如果 analyze_multi_char 返回的 note 中说明切分可能有误差，必须在回答中如实告知用户。
     """,
 )
 
-with open("./image_test/test1.png", "rb") as f:
+with open("./image_test/test.png", "rb") as f:
     image_b64 = base64.b64encode(f.read()).decode()
 
 result = agent.invoke({
