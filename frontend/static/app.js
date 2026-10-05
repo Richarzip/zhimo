@@ -7,13 +7,31 @@ const state = {
   controller: null,
   analyzing: false,
   validating: false,
+<<<<<<< HEAD
 };
 
+=======
+  sessionId: newSessionId(),
+  messages: [], // 对话记录 [{role, text, previewUrl, loading, data}]
+};
+
+function newSessionId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return 's-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+}
+
+>>>>>>> origin/训练
 const $ = (id) => document.getElementById(id);
 const MAX_UPLOAD_BYTES = 32 * 1024 * 1024;
 const MAX_IMAGE_PIXELS = 25_000_000;
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/bmp', 'image/x-ms-bmp', 'image/gif']);
 
+<<<<<<< HEAD
+=======
+const CHAT_EMPTY_HTML =
+  '<div class="chat-empty" id="chatEmpty">上传书法图片或输入问题，与鉴赏 Agent 多轮对话。Agent 能记住同一会话中的上下文。</div>';
+
+>>>>>>> origin/训练
 function setText(id, text) {
   $(id).textContent = text ?? '-';
 }
@@ -71,8 +89,14 @@ function setupUpload() {
 }
 
 function updateAnalyzeButton() {
+<<<<<<< HEAD
   $('analyzeBtn').disabled = !state.file || state.analyzing || state.validating;
   $('analyzeBtn').textContent = state.analyzing ? 'Agent 调用中...' : '开始 Agent 调用';
+=======
+  const canSend = Boolean(state.file) || $('prompt').value.trim();
+  $('analyzeBtn').disabled = !canSend || state.analyzing || state.validating;
+  $('analyzeBtn').textContent = state.analyzing ? '对话中...' : '发送';
+>>>>>>> origin/训练
 }
 
 function cancelAnalysis() {
@@ -169,13 +193,20 @@ function setupModeButtons() {
 }
 
 async function analyze() {
+<<<<<<< HEAD
   if (!state.file || state.analyzing || state.validating) return;
+=======
+  if (state.analyzing || state.validating) return;
+  const text = $('prompt').value.trim();
+  if (!state.file && !text) return;
+>>>>>>> origin/训练
   const requestId = ++state.requestId;
   const controller = new AbortController();
   state.controller = controller;
   state.analyzing = true;
   updateAnalyzeButton();
   $('runState').textContent = '运行中';
+<<<<<<< HEAD
   renderTimeline([{ name: 'request', status: 'running', detail: '正在发送图片到本地服务' }]);
   clearResult('正在分析...');
 
@@ -187,6 +218,24 @@ async function analyze() {
     form.append('cam', String($('camToggle').checked));
     form.append('tta', String($('ttaToggle').checked));
     form.append('prompt', $('prompt').value);
+=======
+  renderTimeline([{ name: 'request', status: 'running', detail: '正在发送消息到本地服务' }]);
+
+  // 用户消息入对话流 + AI loading 占位
+  pushUserMessage(text, state.previewUrl);
+  pushAiMessage({ loading: true });
+
+  try {
+    const form = new FormData();
+    form.append('mode', 'chat');
+    form.append('session_id', state.sessionId);
+    form.append('text', text);
+    if (state.file) form.append('image', state.file);
+    form.append('rag', String($('ragToggle').checked));
+    form.append('cam', String($('camToggle').checked));
+    form.append('tta', String($('ttaToggle').checked));
+    form.append('prompt', text);
+>>>>>>> origin/训练
 
     const res = await fetch('/api/analyze', { method: 'POST', body: form, signal: controller.signal });
     let data;
@@ -200,16 +249,34 @@ async function analyze() {
       throw new Error(`服务返回的数据格式不正确（HTTP ${res.status}）。`);
     }
     if (!res.ok || data.error) {
+<<<<<<< HEAD
       renderResult({ ...data, message: data.message || `请求失败（HTTP ${res.status}）。` });
       $('runState').textContent = '失败';
       return;
     }
     renderResult(data);
+=======
+      const message = data.message || `请求失败（HTTP ${res.status}）。`;
+      renderResult({ ...data, message });
+      pushAiMessage({ text: '', error: message });
+      $('runState').textContent = '失败';
+      return;
+    }
+    // 对话回复 + 右侧最新结果区（chat 返回无 summary，用 AI 回复代替）
+    data.summary = data.reply || data.summary;
+    pushAiMessage({ text: data.reply || '', data });
+    renderResult(data);
+    $('prompt').value = '';
+>>>>>>> origin/训练
     const partial = data.knowledge_diagnostic || data.recognition?.evidence?.error || data.steps?.some((step) => step.status === 'error');
     $('runState').textContent = data.blocked ? '已停止在可诊断节点' : partial ? '部分完成' : '完成';
   } catch (err) {
     if (requestId !== state.requestId || err.name === 'AbortError') return;
     const data = { error: 'browser_error', diagnostic: { message: '浏览器请求失败', raw: String(err) } };
+<<<<<<< HEAD
+=======
+    pushAiMessage({ text: '', error: '浏览器请求失败' });
+>>>>>>> origin/训练
     renderResult(data);
     $('runState').textContent = '失败';
   } finally {
@@ -238,6 +305,165 @@ function clearResult(summary = '上传图片后开始分析。') {
   $('rawJson').textContent = '{}';
 }
 
+<<<<<<< HEAD
+=======
+// ====================== 多轮对话渲染 ======================
+
+function pushUserMessage(text, previewUrl) {
+  state.messages.push({ role: 'user', text: text || '', previewUrl: previewUrl || null });
+  renderChat();
+}
+
+function pushAiMessage({ text = '', loading = false, data = null, error = '' } = {}) {
+  state.messages.push({ role: 'ai', text, loading, data, error });
+  renderChat();
+}
+
+function renderChat() {
+  const list = $('chatList');
+  if (!list) return;
+  if (!state.messages.length) {
+    list.innerHTML = CHAT_EMPTY_HTML;
+    return;
+  }
+  list.innerHTML = state.messages.map((m) => {
+    if (m.role === 'user') {
+      let body = '';
+      if (m.text) body += `<p class="chat-text">${escapeHtml(m.text)}</p>`;
+      if (m.previewUrl) body += `<img class="chat-img" src="${m.previewUrl}" alt="用户上传的图片">`;
+      return `<div class="chat-msg user"><div class="chat-bubble">${body || '<p class="chat-text">（图片）</p>'}</div></div>`;
+    }
+    let body;
+    if (m.loading) {
+      body = '<div class="chat-content chat-loading"><span></span><span></span><span></span></div>';
+    } else if (m.error) {
+      body = `<div class="chat-content chat-error">${escapeHtml(m.error)}</div>`;
+    } else {
+      body = `<div class="chat-content">${renderMarkdown(m.text)}</div>`;
+      body += chatCardsHtml(m.data || {});
+    }
+    return `<div class="chat-msg ai"><div class="chat-bubble">${body}</div></div>`;
+  }).join('');
+  scrollChat();
+}
+
+function scrollChat() {
+  const list = $('chatList');
+  if (list) list.scrollTop = list.scrollHeight;
+}
+
+function chatCardsHtml(data) {
+  const rec = data.recognition || {};
+  const cards = [];
+  if (rec.calligrapher) {
+    cards.push(`<div class="chat-metric"><span>书法家</span><strong>${escapeHtml(rec.calligrapher)}</strong></div>`);
+  }
+  if (rec.confidence !== undefined && rec.confidence !== null) {
+    cards.push(`<div class="chat-metric"><span>置信度</span><strong>${escapeHtml(String(rec.confidence))}</strong></div>`);
+  }
+  if (data.reliability) {
+    cards.push(`<div class="chat-metric"><span>可靠性</span><strong>${escapeHtml(String(data.reliability))}</strong></div>`);
+  }
+  const parts = [];
+  if (cards.length) parts.push(`<div class="chat-cards">${cards.join('')}</div>`);
+  if (rec.evidence?.heatmap) {
+    const src = rec.evidence.heatmap.startsWith('data:') ? rec.evidence.heatmap : `data:image/png;base64,${rec.evidence.heatmap}`;
+    parts.push(`<figure class="chat-visual"><figcaption>Grad-CAM 热力图</figcaption><img src="${src}" alt="Grad-CAM 热力图"></figure>`);
+  }
+  if (data.inversion?.was_inverted) {
+    parts.push('<div class="chat-note">检测到黑底白字拓印，已自动反转为白底黑字后再识别。</div>');
+  }
+  return parts.join('');
+}
+
+// 极简 Markdown 渲染（本地无外部依赖，覆盖标题/列表/引用/代码块/表格/粗体斜体）
+function renderMarkdown(text) {
+  const lines = String(text || '').split('\n');
+  let html = '';
+  let listTag = null; // 'ul' | 'ol' | null
+  const closeList = () => { if (listTag) { html += `</${listTag}>`; listTag = null; } };
+  const openList = (tag) => { if (listTag !== tag) { closeList(); html += `<${tag}>`; listTag = tag; } };
+  let inCode = false;
+  let codeBuf = [];
+  let tableRows = null; // 表格行缓存（escape 后）
+  const flushTable = () => {
+    if (!tableRows || !tableRows.length) return;
+    const rows = tableRows;
+    tableRows = null;
+    const sepRow = rows[0] && rows[0].every((c) => /^:?-+:?$/.test(c));
+    const head = sepRow ? rows[1] : rows[0];
+    const body = sepRow ? rows.slice(2) : rows.slice(1);
+    if (!head || !body.length) return;
+    const thead = `<thead><tr>${head.map((c) => `<th>${inlineMarkup(c)}</th>`).join('')}</tr></thead>`;
+    const tbody = `<tbody>${body.map((r) => `<tr>${r.map((c) => `<td>${inlineMarkup(c)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+    html += `<table>${thead}${tbody}</table>`;
+  };
+  for (const raw of lines) {
+    const trimmed = raw.trim();
+    if (/^```/.test(trimmed)) {
+      if (inCode) {
+        html += `<pre><code>${escapeHtml(codeBuf.join('\n'))}</code></pre>`;
+        codeBuf = [];
+        inCode = false;
+      } else {
+        closeList();
+        inCode = true;
+      }
+      continue;
+    }
+    if (inCode) { codeBuf.push(raw); continue; }
+    const esc = escapeHtml(raw.trim());
+    if (/^\|.*\|$/.test(esc)) {
+      // 表格行：按管道拆单元格（已转义）
+      tableRows = tableRows || [];
+      tableRows.push(esc.split('|').slice(1, -1).map((c) => c.trim()));
+      continue;
+    }
+    let m;
+    if ((m = esc.match(/^####\s+(.*)$/))) { closeList(); flushTable(); html += `<h4>${m[1]}</h4>`; }
+    else if ((m = esc.match(/^###\s+(.*)$/))) { closeList(); flushTable(); html += `<h3>${m[1]}</h3>`; }
+    else if ((m = esc.match(/^##\s+(.*)$/))) { closeList(); flushTable(); html += `<h2>${m[1]}</h2>`; }
+    else if ((m = esc.match(/^#\s+(.*)$/))) { closeList(); flushTable(); html += `<h1>${m[1]}</h1>`; }
+    else if ((m = esc.match(/^&gt;\s?(.*)$/))) { closeList(); flushTable(); html += `<blockquote>${m[1]}</blockquote>`; }
+    else if ((m = esc.match(/^[-*]\s+(.*)$/))) { flushTable(); openList('ul'); html += `<li>${m[1]}</li>`; }
+    else if ((m = esc.match(/^\d+\.\s+(.*)$/))) { flushTable(); openList('ol'); html += `<li>${m[1]}</li>`; }
+    else if (esc === '') { closeList(); flushTable(); }
+    else {
+      closeList(); flushTable();
+      html += `<p>${inlineMarkup(esc)}</p>`;
+    }
+  }
+  closeList();
+  flushTable();
+  if (inCode) html += `<pre><code>${escapeHtml(codeBuf.join('\n'))}</code></pre>`;
+  return html;
+}
+
+function inlineMarkup(esc) {
+  const bold = esc.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  return bold.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+}
+
+function clearChat() {
+  state.messages = [];
+  $('chatList').innerHTML = CHAT_EMPTY_HTML;
+}
+
+// 新对话：重置会话记忆，保留已上传的图片与选项
+function resetChat() {
+  state.sessionId = newSessionId();
+  state.fileVersion += 1;
+  cancelAnalysis();
+  state.validating = false;
+  $('prompt').value = '';
+  updateAnalyzeButton();
+  $('runState').textContent = '等待输入';
+  renderTimeline([]);
+  clearResult();
+  clearChat();
+}
+
+>>>>>>> origin/训练
 function renderResult(data) {
   renderTimeline(data.steps || []);
   $('rawJson').textContent = JSON.stringify(data, null, 2);
@@ -332,10 +558,18 @@ function resetAll() {
   clearFile();
   state.validating = false;
   showUploadError();
+<<<<<<< HEAD
+=======
+  $('prompt').value = '';
+>>>>>>> origin/训练
   updateAnalyzeButton();
   $('runState').textContent = '等待输入';
   renderTimeline([]);
   clearResult();
+<<<<<<< HEAD
+=======
+  clearChat();
+>>>>>>> origin/训练
 }
 
 function boot() {
@@ -343,7 +577,14 @@ function boot() {
   setupModeButtons();
   $('analyzeBtn').addEventListener('click', analyze);
   $('resetBtn').addEventListener('click', resetAll);
+<<<<<<< HEAD
   renderTimeline([]);
+=======
+  $('newChatBtn').addEventListener('click', resetChat);
+  $('prompt').addEventListener('input', updateAnalyzeButton);
+  renderTimeline([]);
+  clearChat();
+>>>>>>> origin/训练
   loadHealth();
 }
 

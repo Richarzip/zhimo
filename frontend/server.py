@@ -8,6 +8,10 @@ import os
 import socket
 import sys
 import traceback
+<<<<<<< HEAD
+=======
+import uuid
+>>>>>>> origin/训练
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -27,7 +31,11 @@ MAX_FIELD_BYTES = 16 * 1024
 MAX_REQUEST_BYTES = MAX_IMAGE_BYTES + 64 * 1024
 MAX_IMAGE_PIXELS = 25_000_000
 ALLOWED_IMAGE_FORMATS = frozenset({"JPEG", "PNG", "WEBP", "BMP", "GIF"})
+<<<<<<< HEAD
 UPLOAD_FIELDS = frozenset({"mode", "tta", "cam", "rag", "prompt"})
+=======
+UPLOAD_FIELDS = frozenset({"mode", "tta", "cam", "rag", "prompt", "session_id", "text"})
+>>>>>>> origin/训练
 
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -162,6 +170,12 @@ def build_summary(result: dict[str, Any]) -> str:
         return "已完成图像预处理，但没有得到书法家识别结论。"
 
     parts = [f"本次本地 Agent 判断最可能的书法家为：{calligrapher}。"]
+<<<<<<< HEAD
+=======
+    inversion = result.get("inversion") or {}
+    if inversion.get("was_inverted"):
+        parts.append("该图片为黑底白字的反色拓印，已自动反转为白底黑字后再识别。")
+>>>>>>> origin/训练
     if confidence is not None:
         parts.append(f"模型置信度为 {confidence}，综合可靠性评级为 {reliability}。")
     if quality:
@@ -186,6 +200,150 @@ def get_recognizer():
     return CalligrapherRecognizer(model_path=str(model_path))
 
 
+<<<<<<< HEAD
+=======
+# ====================== 多轮对话 Agent ======================
+
+# 进程内单例：Agent 图 + 记忆检查点。checkpointer 按 thread_id 保存
+# 每轮 messages，从而实现多轮记忆；服务重启后记忆清空。
+_AGENT = None
+_AGENT_CHECKPOINTER = None
+
+
+def get_agent():
+    """惰性构建带多轮记忆的书法鉴赏 Agent（单例）。"""
+    global _AGENT, _AGENT_CHECKPOINTER
+    if _AGENT is None:
+        from langgraph.checkpoint.memory import MemorySaver
+        from agent_builder import create_calligraphy_agent
+
+        _AGENT_CHECKPOINTER = MemorySaver()
+        _AGENT = create_calligraphy_agent(checkpointer=_AGENT_CHECKPOINTER)
+    return _AGENT
+
+
+def parse_tool_result(content: Any) -> dict[str, Any]:
+    """把 langchain ToolMessage 的 content 解析成 dict。"""
+    if isinstance(content, str):
+        try:
+            parsed = json.loads(content)
+            return parsed if isinstance(parsed, dict) else {"raw": content}
+        except (json.JSONDecodeError, TypeError):
+            return {"raw": content}
+    return content if isinstance(content, dict) else {"raw": str(content)}
+
+
+def run_chat(image: Image.Image, fields: dict[str, str]) -> dict[str, Any]:
+    """多轮对话主流程：把当前轮（文字 + 图片）交给带记忆的 Agent。
+
+    - session_id 作为 langgraph thread_id，续接该会话的历史消息。
+    - 返回 AI 最终回复、工具调用步骤、以及最新一次识别工具的结构化结果。
+    """
+    from langchain.messages import HumanMessage
+
+    session_id = fields.get("session_id") or uuid.uuid4().hex
+    agent = get_agent()
+    config = {"configurable": {"thread_id": session_id}}
+
+    # 记录调用前消息数，用于从返回里切出"本轮新增"的消息
+    snapshot = agent.get_state(config)
+    before = len((snapshot.values or {}).get("messages", [])) if snapshot else 0
+
+    # 构造用户消息：文字 + 图片（图片转 data URL 交给 Agent 工具）
+    content: list[dict[str, Any]] = []
+    text = (fields.get("text") or fields.get("prompt") or "").strip()
+    if text:
+        content.append({"type": "text", "text": text})
+    content.append({
+        "type": "image_url",
+        "image_url": {"url": image_to_data_url(image.convert("RGB"), "PNG")},
+    })
+
+    try:
+        result = agent.invoke(
+            {"messages": [HumanMessage(content=content)]},
+            config=config,
+        )
+    except Exception as exc:  # noqa: BLE001 - 中间件兜底后的最后防线，返回可读错误
+        traceback.print_exc()
+        return {
+            "session_id": session_id,
+            "error": "agent_error",
+            "message": f"Agent 执行失败：{type(exc).__name__}: {str(exc)[:200]}",
+            "diagnostic": classify_exception(exc),
+            "reply": "抱歉，本次分析遇到异常。请稍后重试，或换一张图片 / 换一种问法。",
+        }
+    msgs = result.get("messages", [])
+    new_msgs = msgs[before:]
+
+    # 1) AI 最终回复（最后一条有文本的 ai 消息）
+    reply = ""
+    for m in reversed(new_msgs):
+        if getattr(m, "type", "") == "ai" and m.content:
+            reply = m.content if isinstance(m.content, str) else str(m.content)
+            break
+
+    # 2) 工具调用步骤 + 各工具的结构化返回
+    steps: list[dict[str, Any]] = []
+    tool_results: list[dict[str, Any]] = []
+    for m in new_msgs:
+        mtype = getattr(m, "type", "")
+        if mtype == "ai" and getattr(m, "tool_calls", None):
+            for tc in m.tool_calls:
+                name = tc.get("name", "tool")
+                steps.append({"name": name, "status": "ok", "detail": f"调用工具 {name}"})
+        elif mtype == "tool":
+            parsed = parse_tool_result(m.content)
+            steps.append({"name": getattr(m, "name", "tool"), "status": "ok", "detail": "工具返回结果"})
+            tool_results.append(parsed)
+
+    # 3) 提炼最新一次识别工具的结构化信息（供前端富卡片展示）
+    recognition: dict[str, Any] = {}
+    quality: dict[str, Any] = {}
+    reliability: Any = None
+    mode = "single"
+    inversion: dict[str, Any] | None = None
+    for r in tool_results:
+        if not isinstance(r, dict) or r.get("error"):
+            continue
+        if "calligrapher" in r:
+            recognition = {
+                "calligrapher": r.get("calligrapher"),
+                "confidence": r.get("confidence"),
+                "top_k": r.get("top_k", []),
+                "model_backbone": r.get("model_backbone"),
+                "evidence": r.get("evidence", {}),
+            }
+            if "num_characters" in r:  # 多字投票结果
+                mode = "multi"
+                recognition["num_characters"] = r.get("num_characters")
+                recognition["per_char_results"] = r.get("per_char_results", [])
+                recognition["consistency"] = r.get("consistency")
+                recognition["vote_distribution"] = r.get("vote_distribution", {})
+            else:
+                mode = "single"
+            if "quality" in r:  # analyze_calligraphy 附带质量报告
+                quality = r.get("quality", {})
+                reliability = r.get("reliability")
+            elif "consistency" in r:
+                reliability = r.get("consistency")
+            if r.get("inversion"):
+                inversion = r["inversion"]
+
+    return {
+        "session_id": session_id,
+        "mode": mode,
+        "reply": reply,
+        "steps": steps,
+        "recognition": recognition,
+        "quality": quality,
+        "reliability": reliability,
+        "inversion": inversion,
+        "message_count": len(msgs),
+    }
+
+
+>>>>>>> origin/训练
 def run_single(image: Image.Image, *, use_tta: bool, use_cam: bool, use_rag: bool, prompt: str) -> dict[str, Any]:
     from image_quality import assess_image_quality
 
@@ -196,6 +354,17 @@ def run_single(image: Image.Image, *, use_tta: bool, use_cam: bool, use_rag: boo
     rgb = image.convert("RGB")
     ctx.finish(step, {"size": rgb.size, "preview": image_to_data_url(rgb)}, "图片读取成功")
 
+<<<<<<< HEAD
+=======
+    step = ctx.add("detect_inversion", detail="检测是否为黑底白字拓印，若是则反转为白底黑字")
+    from image_preprocess import detect_and_fix_inversion
+
+    rgb, inversion = detect_and_fix_inversion(rgb)
+    result["inversion"] = inversion
+    detail = "检测为反色拓印，已自动反转" if inversion["was_inverted"] else "非反色，无需处理"
+    ctx.finish(step, inversion, detail)
+
+>>>>>>> origin/训练
     step = ctx.add("assess_image_quality", detail="评估泛黄、褪色、噪声和模糊")
     quality = assess_image_quality(__import__("numpy").array(rgb))
     result["quality"] = quality
@@ -260,6 +429,17 @@ def run_multi(image: Image.Image, *, use_tta: bool, use_rag: bool, prompt: str) 
     step = ctx.add("extract_image", detail="读取上传图片并转换为 RGB")
     ctx.finish(step, {"size": rgb.size, "preview": image_to_data_url(rgb)}, "图片读取成功")
 
+<<<<<<< HEAD
+=======
+    step = ctx.add("detect_inversion", detail="检测是否为黑底白字拓印，若是则反转为白底黑字")
+    from image_preprocess import detect_and_fix_inversion
+
+    rgb, inversion = detect_and_fix_inversion(rgb)
+    result["inversion"] = inversion
+    detail = "检测为反色拓印，已自动反转" if inversion["was_inverted"] else "非反色，无需处理"
+    ctx.finish(step, inversion, detail)
+
+>>>>>>> origin/训练
     step = ctx.add("assess_image_quality", detail="评估图像退化程度")
     quality = assess_image_quality(np.array(rgb))
     result["quality"] = quality
@@ -410,7 +590,11 @@ async def read_upload(request: web.Request) -> tuple[bytes, dict[str, str]]:
 
     if not image_bytes:
         raise UploadError("请上传图片。", error="missing_image")
+<<<<<<< HEAD
     if fields.get("mode", "single") not in {"single", "multi"}:
+=======
+    if fields.get("mode", "single") not in {"single", "multi", "chat"}:
+>>>>>>> origin/训练
         raise UploadError("分析模式无效。", error="invalid_request")
     if any(fields.get(name, "false") not in {"true", "false"} for name in ("tta", "cam", "rag")):
         raise UploadError("分析选项无效。", error="invalid_request")
@@ -441,11 +625,22 @@ def decode_image(image_bytes: bytes) -> Image.Image:
 def analyze_image(image_bytes: bytes, fields: dict[str, str]) -> dict[str, Any]:
     # Image decoding, model inference and knowledge lookup all run in the worker.
     with decode_image(image_bytes) as image:
+<<<<<<< HEAD
+=======
+        mode = fields.get("mode", "single")
+        if mode == "chat":
+            # 多轮对话模式：Agent 带记忆，每次带当前轮文字 + 图片
+            return run_chat(image, fields)
+>>>>>>> origin/训练
         use_tta = fields.get("tta", "false") == "true"
         use_cam = fields.get("cam", "true") == "true"
         use_rag = fields.get("rag", "true") == "true"
         prompt = fields.get("prompt", "")
+<<<<<<< HEAD
         if fields.get("mode", "single") == "multi":
+=======
+        if mode == "multi":
+>>>>>>> origin/训练
             return run_multi(image, use_tta=use_tta, use_rag=use_rag, prompt=prompt)
         return run_single(image, use_tta=use_tta, use_cam=use_cam, use_rag=use_rag, prompt=prompt)
 

@@ -7,6 +7,8 @@ from langchain.tools import tool
 from langgraph.prebuilt import InjectedState
 
 from calligrapher_recognizer import CalligrapherRecognizer
+from ensemble_recognizer import EnsembleRecognizer
+from image_preprocess import detect_and_fix_inversion
 
 import cv2
 import numpy as np
@@ -15,6 +17,7 @@ from rag_setup import build_vectorstore
 
 # 单例：整个进程只加载一次模型
 _recognizer = None
+_ensemble_recognizer = None
 
 def get_recognizer() -> CalligrapherRecognizer:
     global _recognizer
@@ -25,11 +28,23 @@ def get_recognizer() -> CalligrapherRecognizer:
     return _recognizer
 
 
+def get_ensemble_recognizer() -> EnsembleRecognizer:
+    """软投票集成识别器（ConvNeXt + Swin），Agent 默认使用"""
+    global _ensemble_recognizer
+    if _ensemble_recognizer is None:
+        _ensemble_recognizer = EnsembleRecognizer()
+    return _ensemble_recognizer
+
+
 # 辅助函数：从 Agent 状态里提取图片 
 def extract_image_from_state(state: dict) -> Image.Image | None:
-    """从 Agent 的消息历史里找到第一张图片"""
+    """从 Agent 的消息历史里找到最近一张图片（当前轮）。
+
+    多轮对话时历史消息里可能有多张图，这里倒序取最新一条
+    human 消息中的图片，保证识别的是用户当前上传的图。
+    """
     messages = state.get("messages", [])
-    for msg in messages:
+    for msg in reversed(messages):
         if msg.type == "human" and isinstance(msg.content, list):
             for block in msg.content:
                 if isinstance(block, dict) and block.get("type") == "image_url":
@@ -47,18 +62,23 @@ def identify_calligrapher(state: Annotated[dict, InjectedState]) -> dict:
 
     这是唯一能判断书法家身份的工具。
     不要根据图片内容自行猜测书法家。
+    内部使用 ConvNeXt + Swin 双模型软投票集成识别。
 
     返回：
         - calligrapher: 识别到的书法家姓名
         - confidence: 置信度（0-1）
         - top_k: Top-3 候选及置信度
         - all_probabilities: 所有类别概率
+        - ensemble: 双模型集成详情（members 各自判断、agreement 是否一致）
     """
     image = extract_image_from_state(state)
     if image is None:
         return {"error": "没有找到图片，请上传书法作品"}
 
-    recognizer = get_recognizer()
+    # 反色预处理（处理拓印）：黑底白字 → 白底黑字
+    image, inversion = detect_and_fix_inversion(image)
+
+    recognizer = get_ensemble_recognizer()
     result = recognizer.recognize(image)
 
     # 从 all_probabilities 里取 Top-3
@@ -75,7 +95,9 @@ def identify_calligrapher(state: Annotated[dict, InjectedState]) -> dict:
         "top_k": top_k,
         "all_probabilities": result["all_probabilities"],
         "model_backbone": result["model_backbone"],
+        "ensemble": result["ensemble"],
         "evidence": result.get("evidence", {}),
+        "inversion": inversion,
     }
 
 
@@ -93,17 +115,22 @@ def analyze_calligraphy(state: Annotated[dict, InjectedState]) -> dict:
         - top_k: Top-3 候选
         - quality: 图像质量报告（各畸变评分）
         - reliability: 综合可信度评级（high / medium / low）
+        - ensemble: 双模型集成详情（members 各自判断、agreement 是否一致）
     """
     image = extract_image_from_state(state)
     if image is None:
         return {"error": "没有找到图片"}
 
+    # 反色预处理（处理拓印）：黑底白字 → 白底黑字，
+    # 质量评估和识别都基于校正后的图
+    image, inversion = detect_and_fix_inversion(image)
+
     # 质量评估
     img_np = np.array(image.convert("RGB"))
     quality = assess_image_quality(img_np)
 
-    # 直接识别原图
-    recognizer = get_recognizer()
+    # 集成识别 + Grad-CAM（热力图用与集成结论一致的成员模型解释）
+    recognizer = get_ensemble_recognizer()
     result = recognizer.predict_with_cam(image)
 
     # 综合可信度
@@ -128,7 +155,9 @@ def analyze_calligraphy(state: Annotated[dict, InjectedState]) -> dict:
         "top_k": top_k,
         "quality": quality,
         "reliability": reliability,
+        "ensemble": result["ensemble"],
         "evidence": result.get("evidence", {}),
+        "inversion": inversion,
     }
 
 
@@ -171,19 +200,6 @@ def search_knowledge(query: str) -> str:
 
 
 
-def _detect_and_fix_inversion(image: Image.Image) -> Image.Image:
-    """
-    检测反色（黑底白字），如果是则反转
-    用于处理拓印类书法作品
-    """
-    gray = np.array(image.convert("L"))
-    median_val = np.median(gray)
-    # 中位数偏暗 → 黑底白字 → 反转
-    if median_val < 100:
-        return Image.fromarray(255 - np.array(image.convert("RGB")))
-    return image
-
-
 @tool
 def analyze_multi_char(state: Annotated[dict, InjectedState]) -> dict:
     """分析多字书法作品：切分 + 逐字识别 + 综合判断。
@@ -208,8 +224,8 @@ def analyze_multi_char(state: Annotated[dict, InjectedState]) -> dict:
     if image is None:
         return {"error": "没有找到图片"}
 
-    # 反色检测（处理拓印）
-    image = _detect_and_fix_inversion(image)
+    # 反色预处理（处理拓印）：黑底白字 → 白底黑字
+    image, inversion = detect_and_fix_inversion(image)
     img_np = np.array(image.convert("RGB"))
 
     # 1. 切分
@@ -222,8 +238,8 @@ def analyze_multi_char(state: Annotated[dict, InjectedState]) -> dict:
             "note": "图像可能不是书法作品，或者切分失败",
         }
 
-    # 2. 逐字识别
-    recognizer = get_recognizer()
+    # 2. 逐字识别（软投票集成，每个字 ConvNeXt + Swin 平均概率）
+    recognizer = get_ensemble_recognizer()
     per_char_results = []
 
     for (x, y, w, h) in boxes:
@@ -297,5 +313,6 @@ def analyze_multi_char(state: Annotated[dict, InjectedState]) -> dict:
         "vote_distribution": {
             name: len(confs) for name, confs in votes.items()
         },
+        "inversion": inversion,
         "note": "；".join(notes),
     }

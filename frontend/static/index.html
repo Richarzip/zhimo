@@ -40,6 +40,10 @@
           <button class="active" data-mode="single">单字</button>
           <button data-mode="multi">多字作品</button>
         </div>
+<<<<<<< HEAD
+=======
+        <small class="mode-hint">对话模式下由 Agent 自动判断单字 / 多字</small>
+>>>>>>> origin/训练
       </div>
 
       <div class="switch-grid">
@@ -58,11 +62,19 @@
       </div>
 
       <label class="text-field">
+<<<<<<< HEAD
         <span>用户问题</span>
         <textarea id="prompt" rows="4">这是谁的字？为什么？请结合识别结果、置信度、图像质量和知识库进行分析。</textarea>
       </label>
 
       <button class="primary" id="analyzeBtn" disabled>开始 Agent 调用</button>
+=======
+        <span>对话内容</span>
+        <textarea id="prompt" rows="4" placeholder="例：这是谁的字？为什么？ / 这幅字风格有什么特点？ / 和颜真卿比呢？"></textarea>
+      </label>
+
+      <button class="primary" id="analyzeBtn" disabled>发送</button>
+>>>>>>> origin/训练
 
       <div class="env-box" id="envBox">
         <h3>运行环境</h3>
@@ -72,10 +84,28 @@
 
     <section class="panel output-panel">
       <div class="section-title">
+<<<<<<< HEAD
         <h2>Agent 过程</h2>
         <span id="runState" class="muted" role="status">等待输入</span>
       </div>
       <ol class="timeline" id="timeline"></ol>
+=======
+        <h2>对话</h2>
+        <div class="head-actions">
+          <button class="icon-btn" id="newChatBtn" title="新对话">＋</button>
+          <span id="runState" class="muted" role="status">等待输入</span>
+        </div>
+      </div>
+
+      <div class="chat-list" id="chatList">
+        <div class="chat-empty" id="chatEmpty">上传书法图片或输入问题，与鉴赏 Agent 多轮对话。Agent 能记住同一会话中的上下文。</div>
+      </div>
+
+      <details class="step-box">
+        <summary>本轮 Agent 过程</summary>
+        <ol class="timeline" id="timeline"></ol>
+      </details>
+>>>>>>> origin/训练
     </section>
 
     <section class="panel result-panel">

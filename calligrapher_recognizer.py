@@ -48,6 +48,9 @@ TTA_NATIVE_TRANSFORM = T.Compose([
 ])
 
 
+from image_preprocess import detect_and_fix_inversion
+
+
 # ====================== 模型定义 ======================
 
 class ModelWrapper(nn.Module):
@@ -183,6 +186,9 @@ class CalligrapherRecognizer:
         """
         self._load_model()
 
+        # 反色预处理：拓印黑底白字 → 白底黑字，再进入正式推理
+        image, _ = detect_and_fix_inversion(image)
+
         img = image.convert("RGB") if image.mode != "RGB" else image
 
         if tta:
@@ -209,6 +215,8 @@ class CalligrapherRecognizer:
 
     def predict_with_cam(self, image: Image.Image, tta: bool = False) -> dict:
         """带 Grad-CAM 热力图的识别，热力图解释最终（可含 TTA）预测类别。"""
+        # 反色预处理：保证热力图叠加在修正后的白底黑字图上
+        image, _ = detect_and_fix_inversion(image)
         img = image.convert("RGB") if image.mode != "RGB" else image
         result = self.recognize(img, tta=tta)
 
@@ -301,6 +309,8 @@ class CalligrapherRecognizer:
         # 普通批量
         tensors = []
         for img in images:
+            # 反色预处理：拓印黑底白字 → 白底黑字
+            img, _ = detect_and_fix_inversion(img)
             img = img.convert("RGB") if img.mode != "RGB" else img
             tensors.append(self.transform(img))
 

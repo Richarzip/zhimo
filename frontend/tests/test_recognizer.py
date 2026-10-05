@@ -16,6 +16,11 @@ from unittest.mock import Mock, patch
 import numpy as np
 from PIL import Image
 
+<<<<<<< HEAD
+=======
+from image_preprocess import detect_and_fix_inversion
+
+>>>>>>> origin/训练
 
 class Tensor:
     def __init__(self, values):
@@ -71,6 +76,11 @@ def load_inference_methods():
         "TTA_FLIP_TRANSFORM": lambda image: Tensor([1]),
         "TTA_SCALE_TRANSFORM": lambda image: Tensor([2]),
         "TTA_NATIVE_TRANSFORM": lambda image: Tensor([3]),
+<<<<<<< HEAD
+=======
+        # 反色预处理（真实实现，只依赖 numpy/PIL）
+        "detect_and_fix_inversion": detect_and_fix_inversion,
+>>>>>>> origin/训练
     }
     exec(compile(ast.Module(body=[recognizer], type_ignores=[]), str(path), "exec"), scope)
     return scope["CalligrapherRecognizer"]
