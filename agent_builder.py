@@ -8,6 +8,13 @@ load_dotenv()
 
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
+from langchain.agents.middleware import (
+    ModelRetryMiddleware,
+    ToolCallLimitMiddleware,
+    ToolErrorMiddleware,
+    ToolRetryMiddleware,
+    SummarizationMiddleware,
+)
 from langgraph.checkpoint.memory import MemorySaver
 
 from calligrapher_tool import (
@@ -52,6 +59,45 @@ SYSTEM_PROMPT = """你是一位严谨的书法鉴赏专家，负责从图片证�
 """
 
 
+def _tool_error_handler(exc: Exception, request) -> str:
+    """工具异常 → 对模型可见的友好错误消息，避免 Agent 崩溃。
+
+    返回错误内容会被包装成 status="error" 的 ToolMessage 交给模型，
+    让模型知道工具失败了而不是中断整个对话。
+    """
+    tool_name = request.tool.name if request.tool else request.tool_call.get("name", "tool")
+    brief = str(exc)[:120] if str(exc) else type(exc).__name__
+    return (
+        f"工具 `{tool_name}` 调用失败（{type(exc).__name__}: {brief}）。"
+        "请检查输入是否有效（如图片格式、检索词），修正后重试，或换一种问法。"
+    )
+
+
+def _build_middleware(model):
+    """用 LangChain 原生中间件做容错与保护，不自己实现重试/错误处理。
+
+    组合顺序：列表靠前的中间件在外层。
+    - ToolErrorMiddleware（外层）：工具异常统一转错误消息，Agent 不崩溃；
+    - ToolRetryMiddleware（内层）：工具失败重试 1 次，耗尽后抛出交给外层处理；
+    - ModelRetryMiddleware：模型调用失败自动重试 2 次（指数退避），
+      耗尽后返回错误消息让 Agent 继续，而不是中断；
+    - ToolCallLimitMiddleware：单轮最多 10 次工具调用，防止 Agent 陷入循环；
+    - SummarizationMiddleware：多轮对话历史超过 30 条消息时自动摘要旧消息，
+      防止上下文超限（触发前保留最近 20 条）。
+    """
+    return [
+        ToolErrorMiddleware(on_error=_tool_error_handler),
+        ToolRetryMiddleware(max_retries=1, on_failure="error"),
+        ModelRetryMiddleware(max_retries=2, on_failure="continue"),
+        ToolCallLimitMiddleware(run_limit=10, exit_behavior="continue"),
+        SummarizationMiddleware(
+            model=model,
+            trigger=[("messages", 30)],
+            keep=("messages", 20),
+        ),
+    ]
+
+
 def create_calligraphy_agent(checkpointer=None):
     """构建书法鉴赏 Agent。
 
@@ -74,4 +120,5 @@ def create_calligraphy_agent(checkpointer=None):
         ],
         system_prompt=SYSTEM_PROMPT,
         checkpointer=checkpointer,
+        middleware=_build_middleware(model),
     )

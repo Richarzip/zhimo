@@ -247,10 +247,20 @@ def run_chat(image: Image.Image, fields: dict[str, str]) -> dict[str, Any]:
         "image_url": {"url": image_to_data_url(image.convert("RGB"), "PNG")},
     })
 
-    result = agent.invoke(
-        {"messages": [HumanMessage(content=content)]},
-        config=config,
-    )
+    try:
+        result = agent.invoke(
+            {"messages": [HumanMessage(content=content)]},
+            config=config,
+        )
+    except Exception as exc:  # noqa: BLE001 - 中间件兜底后的最后防线，返回可读错误
+        traceback.print_exc()
+        return {
+            "session_id": session_id,
+            "error": "agent_error",
+            "message": f"Agent 执行失败：{type(exc).__name__}: {str(exc)[:200]}",
+            "diagnostic": classify_exception(exc),
+            "reply": "抱歉，本次分析遇到异常。请稍后重试，或换一张图片 / 换一种问法。",
+        }
     msgs = result.get("messages", [])
     new_msgs = msgs[before:]
 
