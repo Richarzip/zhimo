@@ -1,0 +1,802 @@
+﻿{
+    "generated_at":  "2026-10-05T19:37:42.0706937Z",
+    "source_policy":  [
+                          "https://zh.wikipedia.org/",
+                          "https://commons.wikimedia.org/"
+                      ],
+    "entries":  [
+                    {
+                        "name":  "王羲之",
+                        "wiki":  {
+                                     "title":  "王羲之",
+                                     "url":  "https://zh.wikipedia.org/wiki/%E7%8E%8B%E7%BE%B2%E4%B9%8B",
+                                     "pageid":  32458,
+                                     "extract":  "王羲之（303年—361年），字逸少，琅邪郡临沂县（今山东省临沂市）人，淮南太守王旷之子，官拜右軍將軍，人稱王右軍。為王導之姪，是東晉時期的书法家，人稱书圣，與書法家鍾繇合稱為「鍾王」。其書法師承衛夫人（衛夫人則師承鍾繇）\n王羲之的书法实践，变当时流行的章草、八分为今草、行书、楷书，是书体转换时期平地而起的高峰。其書法尺牘散見於唐朝的精摹本《十七帖》、《快雪時晴帖》、现藏于日本的《丧乱帖》、《孔侍中帖》等名品。王羲之的書法真跡皆已失傳，其作品《蘭亭集序》等帖，均為後人臨摹。\n\n",
+                                     "exact":  true
+                                 },
+                        "images":  [
+                                       {
+                                           "title":  "File:Portraits of Famous Men - Wang Xizhi (cropped).jpg",
+                                           "source_url":  "https://commons.wikimedia.org/wiki/File%3APortraits%20of%20Famous%20Men%20-%20Wang%20Xizhi%20(cropped).jpg",
+                                           "download_url":  "https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d0/Portraits_of_Famous_Men_-_Wang_Xizhi_%28cropped%29.jpg/1280px-Portraits_of_Famous_Men_-_Wang_Xizhi_%28cropped%29.jpg?utm_source=commons.wikimedia.org\u0026utm_campaign=imageinfo\u0026utm_content=thumbnail",
+                                           "path":  "frontend/static/assets/calligrapher/王羲之_1.jpg",
+                                           "url":  "/static/assets/calligrapher/王羲之_1.jpg",
+                                           "license":  "Public domain"
+                                       }
+                                   ],
+                        "review_status":  "source_found",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "王献之",
+                        "wiki":  {
+                                     "title":  "王献之",
+                                     "url":  "https://zh.wikipedia.org/wiki/%E7%8E%8B%E7%8C%AE%E4%B9%8B",
+                                     "pageid":  184634,
+                                     "extract":  "王献之（344年—386年），字子敬，琅邪郡临沂县（今山东省临沂市），王羲之第七子。官至中书令，为与族弟王珉区分，人称王大令。与其父并称为“二王”。逸事多見於《世說新語》與《晉書·王羲之傳》中。",
+                                     "exact":  true
+                                 },
+                        "images":  [
+                                       {
+                                           "title":  "File:Mid-Autumn Festival Post.jpg",
+                                           "source_url":  "https://commons.wikimedia.org/wiki/File%3AMid-Autumn%20Festival%20Post.jpg",
+                                           "download_url":  "https://thumb.wikimedia.org/wikipedia/commons/thumb/7/7f/Mid-Autumn_Festival_Post.jpg/1280px-Mid-Autumn_Festival_Post.jpg?utm_source=commons.wikimedia.org\u0026utm_campaign=imageinfo\u0026utm_content=thumbnail",
+                                           "path":  "frontend/static/assets/calligrapher/王献之_2.jpg",
+                                           "url":  "/static/assets/calligrapher/王献之_2.jpg",
+                                           "license":  "CC0"
+                                       }
+                                   ],
+                        "review_status":  "source_found",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "钟繇",
+                        "wiki":  {
+                                     "title":  "钟繇",
+                                     "url":  "https://zh.wikipedia.org/wiki/%E9%92%9F%E7%B9%87",
+                                     "pageid":  338022,
+                                     "extract":  "簡繁重定向：这是簡體至繁體，或繁體至簡體的重定向。\n本重定向用來避免重複创建頁面、減少轉換系統出錯時的紅字問題。使用了本連結的頁面可能需要更新，以直接連結至目標頁面。請勿使用管道連結，這會隱藏正確的敘述。\n並非純簡繁字體差異者，請使用{{別名重定向}}或其他合適的重定向模板。",
+                                     "exact":  true
+                                 },
+                        "images":  [
+                                       {
+                                           "title":  "File:Memorial Recommending Ji Zhi Zhong Yao.jpg",
+                                           "source_url":  "https://commons.wikimedia.org/wiki/File%3AMemorial%20Recommending%20Ji%20Zhi%20Zhong%20Yao.jpg",
+                                           "download_url":  "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/67/Memorial_Recommending_Ji_Zhi_Zhong_Yao.jpg/1280px-Memorial_Recommending_Ji_Zhi_Zhong_Yao.jpg?utm_source=commons.wikimedia.org\u0026utm_campaign=imageinfo\u0026utm_content=thumbnail",
+                                           "path":  "frontend/static/assets/calligrapher/钟繇_1.jpg",
+                                           "url":  "/static/assets/calligrapher/钟繇_1.jpg",
+                                           "license":  "Public domain"
+                                       }
+                                   ],
+                        "review_status":  "source_found",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "智永",
+                        "wiki":  {
+                                     "title":  "智永",
+                                     "url":  "https://zh.wikipedia.org/wiki/%E6%99%BA%E6%B0%B8",
+                                     "pageid":  515141,
+                                     "extract":  "智永（？—？），本姓王，名法极，法名智永，东晋书法家王羲之的第七世孙，陈、隋间山阴（今浙江绍兴）永欣寺僧人。\n智勇继承师法，精勤书艺，据传为练好书法四十年不下楼。相传曾手写《真草千字文》八百余本，分送浙东诸寺庙；当时求书者很多，住处门檻踏损，裹以铁皮，号为“铁门檻”；虞世南得其传授，影响初唐書學。\n傳說智永藏有其祖王羲之的《蘭亭集序》真跡，圓寂前傳予弟子辨才和尚，據後來出仕唐太宗的虞世南證實曾見過。太宗渴求此珍寶，不惜用盡各種手段，皆不能得。直到派出監察御史蕭翼，偽裝成一落魄書生，來到永欣寺與辨才交好，後又趁其外出不備，盜走《蘭亭》。辨才老和尚發現墨寶被竊後，大叫一聲，昏絕於地，良久方醒，自覺愧對師父，一年後抑鬱而終。",
+                                     "exact":  true
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "source_found",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "虞世南",
+                        "wiki":  {
+                                     "title":  "虞世南",
+                                     "url":  "https://zh.wikipedia.org/wiki/%E8%99%9E%E4%B8%96%E5%8D%97",
+                                     "pageid":  302003,
+                                     "extract":  "虞世南（558年—638年7月11日），字伯施，越州餘姚（今浙江省餘姚市）人，唐朝官员、文學重臣。工書法，与欧阳询、褚遂良、薛稷合称“初唐四大家”。与欧阳询、褚遂良被日本学界合称为“初唐三大家”。编有《北堂书钞》一百六十卷，被誉为唐代四大类书之一，是中国现存最早的类书之一。《全唐诗》存其诗一卷。\n\n",
+                                     "exact":  true
+                                 },
+                        "images":  [
+                                       {
+                                           "title":  "File:Yu Shi-Nan Calligraphy 02.jpg",
+                                           "source_url":  "https://commons.wikimedia.org/wiki/File%3AYu%20Shi-Nan%20Calligraphy%2002.jpg",
+                                           "download_url":  "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/aa/Yu_Shi-Nan_Calligraphy_02.jpg/1280px-Yu_Shi-Nan_Calligraphy_02.jpg?utm_source=commons.wikimedia.org\u0026utm_campaign=imageinfo\u0026utm_content=thumbnail",
+                                           "path":  "frontend/static/assets/calligrapher/虞世南_1.jpg",
+                                           "url":  "/static/assets/calligrapher/虞世南_1.jpg",
+                                           "license":  "Public domain"
+                                       },
+                                       {
+                                           "title":  "File:四明人鑑·唐永興縣子文懿虞公世南.png",
+                                           "source_url":  "https://commons.wikimedia.org/wiki/File%3A%E5%9B%9B%E6%98%8E%E4%BA%BA%E9%91%91%C2%B7%E5%94%90%E6%B0%B8%E8%88%88%E7%B8%A3%E5%AD%90%E6%96%87%E6%87%BF%E8%99%9E%E5%85%AC%E4%B8%96%E5%8D%97.png",
+                                           "download_url":  "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/ff/%E5%9B%9B%E6%98%8E%E4%BA%BA%E9%91%91%C2%B7%E5%94%90%E6%B0%B8%E8%88%88%E7%B8%A3%E5%AD%90%E6%96%87%E6%87%BF%E8%99%9E%E5%85%AC%E4%B8%96%E5%8D%97.png/1280px-%E5%9B%9B%E6%98%8E%E4%BA%BA%E9%91%91%C2%B7%E5%94%90%E6%B0%B8%E8%88%88%E7%B8%A3%E5%AD%90%E6%96%87%E6%87%BF%E8%99%9E%E5%85%AC%E4%B8%96%E5%8D%97.png?utm_source=commons.wikimedia.org\u0026utm_campaign=imageinfo\u0026utm_content=thumbnail",
+                                           "path":  "frontend/static/assets/calligrapher/虞世南_2.png",
+                                           "url":  "/static/assets/calligrapher/虞世南_2.png",
+                                           "license":  "Public domain"
+                                       }
+                                   ],
+                        "review_status":  "source_found",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "欧阳询",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "褚遂良",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "孙过庭",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "张旭",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "颜真卿",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "怀素",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "柳公权",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "李阳冰",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "唐玄宗",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "宋高宗",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "苏轼",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "黄庭坚",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "米芾",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "蔡襄",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "宋徽宗",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "朱熹",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "赵孟頫",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "鲜于枢",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "康里巎巎",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "文徵明",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "祝允明",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "唐寅",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "陈道复",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "王宠",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "徐渭",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "董其昌",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "倪元璐",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "王铎",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "傅山",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "金农",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "郑板桥",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "刘墉",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "伊秉绶",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "邓石如",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "吴昌硕",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "赵之谦",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "何绍基",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "成亲王",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "王福庵",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "张瑞图",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "于右任",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "弘一",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "八大山人",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "毛泽东",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "鲁迅",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "沙孟海",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "启功",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    },
+                    {
+                        "name":  "林散之",
+                        "wiki":  {
+                                     "error":  "Wikipedia request failed",
+                                     "exact":  false
+                                 },
+                        "images":  [
+
+                                   ],
+                        "review_status":  "needs_manual_review",
+                        "review_notes":  [
+                                             "Manual review is still required for style claims and work attribution."
+                                         ]
+                    }
+                ]
+}

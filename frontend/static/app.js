@@ -208,6 +208,9 @@ async function analyze() {
     form.append('rag', String($('ragToggle').checked));
     form.append('cam', String($('camToggle').checked));
     form.append('tta', String($('ttaToggle').checked));
+    form.append('denoise', String($('denoiseToggle').checked));
+    form.append('examples', String($('examplesToggle').checked));
+    form.append('pdf', String($('pdfToggle').checked));
     form.append('prompt', text);
 
     const res = await fetch('/api/analyze', { method: 'POST', body: form, signal: controller.signal });
@@ -262,6 +265,11 @@ function clearResult(summary = '上传图片后开始分析。') {
   $('rankList').innerHTML = '';
   $('camFigure').classList.add('hidden');
   $('segFigure').classList.add('hidden');
+  $('referenceBox').classList.add('hidden');
+  $('referenceGrid').innerHTML = '';
+  $('referenceNote').textContent = '';
+  $('reportActions').classList.add('hidden');
+  $('downloadPdfBtn').onclick = null;
   $('camImage').removeAttribute('src');
   $('segImage').removeAttribute('src');
   $('rawJson').textContent = '{}';
@@ -455,6 +463,34 @@ function renderResult(data) {
     $('segImage').src = data.segmentation.overlay;
     $('segFigure').classList.remove('hidden');
   }
+  renderReferences(data);
+  if (data.pdf?.data_url) {
+    $('reportActions').classList.remove('hidden');
+    $('downloadPdfBtn').onclick = () => {
+      const link = document.createElement('a');
+      link.href = data.pdf.data_url;
+      link.download = data.pdf.filename || 'zhimo_report.pdf';
+      link.click();
+    };
+  }
+}
+
+function renderReferences(data) {
+  const examples = Array.isArray(data.reference_examples) ? data.reference_examples : [];
+  const note = data.reference_examples_note || '';
+  if (!examples.length && !note) return;
+  $('referenceBox').classList.remove('hidden');
+  $('referenceNote').textContent = note;
+  $('referenceGrid').innerHTML = examples.map((item) => `
+    <figure class="reference-item">
+      <img src="${escapeHtml(item.url)}" alt="${escapeHtml(item.title || 'calligraphy example')}" />
+      <figcaption>
+        <strong>${escapeHtml(item.title || 'work example')}</strong>
+        <small>${escapeHtml(item.license || 'license unavailable')}</small>
+        <a href="${escapeHtml(item.source_url || '#')}" target="_blank" rel="noreferrer">Source</a>
+      </figcaption>
+    </figure>
+  `).join('');
 }
 
 function renderTimeline(steps) {

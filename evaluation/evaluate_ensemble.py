@@ -9,23 +9,30 @@
         集成概率 = 两模型 softmax 概率平均，避免重复推理。
 
 用法：
-    python evaluate_ensemble.py [--n 120] [--seed 42] [--out evaluate_result.txt]
+    python evaluation/evaluate_ensemble.py [--n 120] [--seed 42] [--out evaluation_result.txt]
 """
 
 import argparse
 import os
 import random
+import sys
 from datetime import datetime
+from pathlib import Path
 
 import torch
 from PIL import Image
 
-from calligrapher_recognizer import CalligrapherRecognizer, DEFAULT_TRANSFORM
-from image_preprocess import detect_and_fix_inversion
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from zhimo.vision.recognizer import CalligrapherRecognizer, DEFAULT_TRANSFORM
+from zhimo.vision.preprocess import detect_and_fix_inversion
 
 
 DATASET_ROOT = r"D:\experiment3\dataset_total\dataset1"
-DEFAULT_OUT = r"D:\zhimo\evaluate_result.txt"
+DEFAULT_OUT = os.path.join(ROOT, "evaluation_result.txt")
 
 
 def collect_samples(n_per_class: int, seed: int):

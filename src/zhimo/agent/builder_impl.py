@@ -17,7 +17,7 @@ from langchain.agents.middleware import (
 )
 from langgraph.checkpoint.memory import MemorySaver
 
-from calligrapher_tool import (
+from .tools_impl import (
     identify_calligrapher,
     analyze_calligraphy,
     search_knowledge,

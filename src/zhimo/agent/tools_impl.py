@@ -6,14 +6,14 @@ from PIL import Image
 from langchain.tools import tool
 from langgraph.prebuilt import InjectedState
 
-from calligrapher_recognizer import CalligrapherRecognizer
-from ensemble_recognizer import EnsembleRecognizer
-from image_preprocess import detect_and_fix_inversion
+from ..vision.recognizer_impl import CalligrapherRecognizer
+from ..vision.ensemble_impl import EnsembleRecognizer
+from ..vision.preprocess_impl import detect_and_fix_inversion
 
 import cv2
 import numpy as np
-from image_quality import assess_image_quality
-from rag_setup import build_vectorstore
+from ..vision.quality_impl import assess_image_quality
+from ..knowledge.chroma import build_vectorstore
 
 # 单例：整个进程只加载一次模型
 _recognizer = None
@@ -218,7 +218,7 @@ def analyze_multi_char(state: Annotated[dict, InjectedState]) -> dict:
         - consistency: 一致性评级（high/medium/low）
         - note: 说明（切分方法、异常情况等）
     """
-    from segment import segment_auto
+    from ..vision.segmentation_impl import segment_auto
     
     image = extract_image_from_state(state)
     if image is None:

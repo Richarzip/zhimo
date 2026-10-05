@@ -1,8 +1,8 @@
 """
 运行方式:
   - 双击本文件
-  - 或在 IDE / 终端中运行: python train.py
-  - 也可通过命令行覆盖参数: python train.py --epochs 10 --backbone resnet50
+  - 或在 IDE / 终端中运行: python training/train.py
+  - 也可通过命令行覆盖参数: python training/train.py --epochs 10 --backbone resnet50
 """
 
 import os
@@ -75,7 +75,7 @@ CONFIG = {
     },
 
     # ── 输出路径 ────────────────────────────────────────
-    "output_dir": os.path.join(os.path.dirname(__file__), "checkpoints_test_gelu"),
+    "output_dir": os.path.join(os.path.dirname(os.path.dirname(__file__)), "checkpoints_test_gelu"),
 
     # ── 模型 ────────────────────────────────────────────
     # 支持: resnet50 / convnext_tiny / efficientnet_b3 / convnext_small / vit_small_patch16_224 / swin_tiny_patch4_window7_224

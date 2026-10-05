@@ -3,9 +3,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import base64
+import sys
+from pathlib import Path
 from PIL import Image
 from langchain.messages import HumanMessage
-from calligrapher_tool import identify_calligrapher
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from zhimo.agent.tools import identify_calligrapher
 
 # 读取测试图片
 with open("test.jpg", "rb") as f:

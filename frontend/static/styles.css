@@ -203,6 +203,15 @@ textarea:focus { outline: 2px solid rgba(29, 99, 192, .18); border-color: var(--
   font-size: 15px;
 }
 .primary:disabled { opacity: .45; cursor: not-allowed; }
+.secondary {
+  border: 1px solid var(--blue);
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: #fff;
+  color: var(--blue);
+  cursor: pointer;
+  font-weight: 700;
+}
 .env-box {
   padding: 14px;
   border-radius: 12px;
@@ -442,6 +451,14 @@ dd { margin-left: 112px; font-size: 12px; word-break: break-all; }
 .visual { margin: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #111827; }
 .visual figcaption { padding: 10px 12px; background: #fff; color: var(--muted); font-size: 13px; font-weight: 700; }
 .visual img { width: 100%; display: block; max-height: 360px; object-fit: contain; }
+.reference-box { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 14px; }
+.reference-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.reference-item { margin: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff; }
+.reference-item img { width: 100%; height: 190px; object-fit: contain; background: #f8fafc; display: block; }
+.reference-item figcaption { display: grid; gap: 5px; padding: 9px 10px; font-size: 12px; }
+.reference-item small { color: var(--muted); }
+.reference-item a { color: var(--blue); text-decoration: none; }
+.report-actions { margin-top: 16px; }
 .raw-box { margin-top: 16px; }
 .raw-box summary { cursor: pointer; color: var(--muted); font-weight: 700; }
 pre {
@@ -463,5 +480,6 @@ pre {
   .topbar { align-items: flex-start; flex-direction: column; padding: 20px; }
   .layout { grid-template-columns: 1fr; padding: 12px; }
   .cards, .two-col, .visual-grid { grid-template-columns: 1fr; }
+  .reference-grid { grid-template-columns: 1fr; }
   .chat-list { max-height: 50vh; }
 }

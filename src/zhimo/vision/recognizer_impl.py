@@ -48,7 +48,7 @@ TTA_NATIVE_TRANSFORM = T.Compose([
 ])
 
 
-from image_preprocess import detect_and_fix_inversion
+from .preprocess_impl import detect_and_fix_inversion
 
 
 # ====================== 模型定义 ======================

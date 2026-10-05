@@ -16,7 +16,12 @@ from unittest.mock import Mock, patch
 import numpy as np
 from PIL import Image
 
-from image_preprocess import detect_and_fix_inversion
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from zhimo.vision.preprocess import detect_and_fix_inversion
 
 
 class Tensor:
@@ -49,7 +54,10 @@ def softmax(tensor, dim):
 
 
 def load_inference_methods():
-    path = Path(__file__).resolve().parents[2] / "calligrapher_recognizer.py"
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src" / "zhimo" / "vision" / "recognizer_impl.py"
+    )
     tree = ast.parse(path.read_text(encoding="utf-8"))
     recognizer = next(
         node for node in tree.body

@@ -11,7 +11,7 @@ convnext_tiny（best_acc 0.8515）与 swin_tiny（best_acc 0.8481），
 类别顺序已验证完全一致，可直接按索引平均。
 
 用法：
-    from ensemble_recognizer import EnsembleRecognizer
+    from zhimo.vision import EnsembleRecognizer
     rec = EnsembleRecognizer()
     result = rec.recognize(img)          # 软投票结果（含两个子模型详情）
     rec.recognize_batch(imgs)            # 批量
@@ -20,8 +20,8 @@ convnext_tiny（best_acc 0.8515）与 swin_tiny（best_acc 0.8481），
 import torch
 from PIL import Image
 
-from calligrapher_recognizer import CalligrapherRecognizer, DEFAULT_TRANSFORM
-from image_preprocess import detect_and_fix_inversion
+from .recognizer_impl import CalligrapherRecognizer, DEFAULT_TRANSFORM
+from .preprocess_impl import detect_and_fix_inversion
 
 
 class EnsembleRecognizer:
@@ -142,7 +142,7 @@ class EnsembleRecognizer:
         img = image.convert("RGB") if image.mode != "RGB" else image
 
         if tta:
-            from calligrapher_recognizer import (
+            from .recognizer_impl import (
                 TTA_FLIP_TRANSFORM,
                 TTA_SCALE_TRANSFORM,
                 TTA_NATIVE_TRANSFORM,

@@ -56,6 +56,18 @@
           <span>TTA 推理增强</span>
           <input id="ttaToggle" type="checkbox" />
         </label>
+        <label class="switch-row">
+          <span>Traditional denoising</span>
+          <input id="denoiseToggle" type="checkbox" checked />
+        </label>
+        <label class="switch-row">
+          <span>Show calligrapher examples</span>
+          <input id="examplesToggle" type="checkbox" />
+        </label>
+        <label class="switch-row">
+          <span>Generate explainable PDF</span>
+          <input id="pdfToggle" type="checkbox" />
+        </label>
       </div>
 
       <label class="text-field">
@@ -135,6 +147,16 @@
           <figcaption>多字切分结果</figcaption>
           <img id="segImage" alt="切分结果" />
         </figure>
+      </div>
+
+      <section class="reference-box hidden" id="referenceBox">
+        <h3>Calligrapher examples</h3>
+        <div class="reference-grid" id="referenceGrid"></div>
+        <p class="muted" id="referenceNote"></p>
+      </section>
+
+      <div class="report-actions hidden" id="reportActions">
+        <button class="secondary" id="downloadPdfBtn" type="button">Download PDF report</button>
       </div>
 
       <details class="raw-box">
