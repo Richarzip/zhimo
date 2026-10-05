@@ -7,6 +7,7 @@ from langchain.tools import tool
 from langgraph.prebuilt import InjectedState
 
 from calligrapher_recognizer import CalligrapherRecognizer
+from image_preprocess import detect_and_fix_inversion
 
 import cv2
 import numpy as np
@@ -27,9 +28,13 @@ def get_recognizer() -> CalligrapherRecognizer:
 
 # 辅助函数：从 Agent 状态里提取图片 
 def extract_image_from_state(state: dict) -> Image.Image | None:
-    """从 Agent 的消息历史里找到第一张图片"""
+    """从 Agent 的消息历史里找到最近一张图片（当前轮）。
+
+    多轮对话时历史消息里可能有多张图，这里倒序取最新一条
+    human 消息中的图片，保证识别的是用户当前上传的图。
+    """
     messages = state.get("messages", [])
-    for msg in messages:
+    for msg in reversed(messages):
         if msg.type == "human" and isinstance(msg.content, list):
             for block in msg.content:
                 if isinstance(block, dict) and block.get("type") == "image_url":
@@ -58,6 +63,9 @@ def identify_calligrapher(state: Annotated[dict, InjectedState]) -> dict:
     if image is None:
         return {"error": "没有找到图片，请上传书法作品"}
 
+    # 反色预处理（处理拓印）：黑底白字 → 白底黑字
+    image, inversion = detect_and_fix_inversion(image)
+
     recognizer = get_recognizer()
     result = recognizer.recognize(image)
 
@@ -76,6 +84,7 @@ def identify_calligrapher(state: Annotated[dict, InjectedState]) -> dict:
         "all_probabilities": result["all_probabilities"],
         "model_backbone": result["model_backbone"],
         "evidence": result.get("evidence", {}),
+        "inversion": inversion,
     }
 
 
@@ -97,6 +106,10 @@ def analyze_calligraphy(state: Annotated[dict, InjectedState]) -> dict:
     image = extract_image_from_state(state)
     if image is None:
         return {"error": "没有找到图片"}
+
+    # 反色预处理（处理拓印）：黑底白字 → 白底黑字，
+    # 质量评估和识别都基于校正后的图
+    image, inversion = detect_and_fix_inversion(image)
 
     # 质量评估
     img_np = np.array(image.convert("RGB"))
@@ -129,6 +142,7 @@ def analyze_calligraphy(state: Annotated[dict, InjectedState]) -> dict:
         "quality": quality,
         "reliability": reliability,
         "evidence": result.get("evidence", {}),
+        "inversion": inversion,
     }
 
 
@@ -171,19 +185,6 @@ def search_knowledge(query: str) -> str:
 
 
 
-def _detect_and_fix_inversion(image: Image.Image) -> Image.Image:
-    """
-    检测反色（黑底白字），如果是则反转
-    用于处理拓印类书法作品
-    """
-    gray = np.array(image.convert("L"))
-    median_val = np.median(gray)
-    # 中位数偏暗 → 黑底白字 → 反转
-    if median_val < 100:
-        return Image.fromarray(255 - np.array(image.convert("RGB")))
-    return image
-
-
 @tool
 def analyze_multi_char(state: Annotated[dict, InjectedState]) -> dict:
     """分析多字书法作品：切分 + 逐字识别 + 综合判断。
@@ -208,8 +209,8 @@ def analyze_multi_char(state: Annotated[dict, InjectedState]) -> dict:
     if image is None:
         return {"error": "没有找到图片"}
 
-    # 反色检测（处理拓印）
-    image = _detect_and_fix_inversion(image)
+    # 反色预处理（处理拓印）：黑底白字 → 白底黑字
+    image, inversion = detect_and_fix_inversion(image)
     img_np = np.array(image.convert("RGB"))
 
     # 1. 切分
@@ -297,5 +298,6 @@ def analyze_multi_char(state: Annotated[dict, InjectedState]) -> dict:
         "vote_distribution": {
             name: len(confs) for name, confs in votes.items()
         },
+        "inversion": inversion,
         "note": "；".join(notes),
     }
