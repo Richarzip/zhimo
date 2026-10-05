@@ -8,10 +8,7 @@ import os
 import socket
 import sys
 import traceback
-<<<<<<< HEAD
-=======
 import uuid
->>>>>>> origin/训练
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -25,17 +22,16 @@ from PIL import Image, ImageDraw, UnidentifiedImageError
 FRONTEND_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = FRONTEND_DIR.parent
 STATIC_DIR = FRONTEND_DIR / "static"
-DEFAULT_MODEL_PATH = PROJECT_ROOT / "checkpoints" / "convnext.pth"
+DEFAULT_MODEL_PATHS = (
+    PROJECT_ROOT / "checkpoints" / "convnext.pth",
+    PROJECT_ROOT / "checkpoints" / "swin.pth",
+)
 MAX_IMAGE_BYTES = 32 * 1024 * 1024
 MAX_FIELD_BYTES = 16 * 1024
 MAX_REQUEST_BYTES = MAX_IMAGE_BYTES + 64 * 1024
 MAX_IMAGE_PIXELS = 25_000_000
 ALLOWED_IMAGE_FORMATS = frozenset({"JPEG", "PNG", "WEBP", "BMP", "GIF"})
-<<<<<<< HEAD
-UPLOAD_FIELDS = frozenset({"mode", "tta", "cam", "rag", "prompt"})
-=======
 UPLOAD_FIELDS = frozenset({"mode", "tta", "cam", "rag", "prompt", "session_id", "text"})
->>>>>>> origin/训练
 
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -170,12 +166,9 @@ def build_summary(result: dict[str, Any]) -> str:
         return "已完成图像预处理，但没有得到书法家识别结论。"
 
     parts = [f"本次本地 Agent 判断最可能的书法家为：{calligrapher}。"]
-<<<<<<< HEAD
-=======
     inversion = result.get("inversion") or {}
     if inversion.get("was_inverted"):
         parts.append("该图片为黑底白字的反色拓印，已自动反转为白底黑字后再识别。")
->>>>>>> origin/训练
     if confidence is not None:
         parts.append(f"模型置信度为 {confidence}，综合可靠性评级为 {reliability}。")
     if quality:
@@ -191,17 +184,30 @@ def build_summary(result: dict[str, Any]) -> str:
     return "".join(parts)
 
 
+def resolve_model_paths() -> list[Path]:
+    raw_paths = os.environ.get("ZHIMO_MODEL_PATHS")
+    if raw_paths:
+        paths = [Path(item.strip()) for item in raw_paths.split(os.pathsep) if item.strip()]
+    elif os.environ.get("ZHIMO_MODEL_PATH"):
+        # Backward-compatible single-model override for local diagnostics.
+        paths = [Path(os.environ["ZHIMO_MODEL_PATH"])]
+    else:
+        paths = list(DEFAULT_MODEL_PATHS)
+    return [path if path.is_absolute() else PROJECT_ROOT / path for path in paths]
+
+
 def get_recognizer():
-    from calligrapher_recognizer import CalligrapherRecognizer
+    paths = resolve_model_paths()
+    if len(paths) == 1:
+        from calligrapher_recognizer import CalligrapherRecognizer
 
-    model_path = Path(os.environ.get("ZHIMO_MODEL_PATH", str(DEFAULT_MODEL_PATH)))
-    if not model_path.is_absolute():
-        model_path = PROJECT_ROOT / model_path
-    return CalligrapherRecognizer(model_path=str(model_path))
+        return CalligrapherRecognizer(model_path=str(paths[0]))
+
+    from ensemble_recognizer import EnsembleRecognizer
+
+    return EnsembleRecognizer(model_paths=[str(path) for path in paths])
 
 
-<<<<<<< HEAD
-=======
 # ====================== 多轮对话 Agent ======================
 
 # 进程内单例：Agent 图 + 记忆检查点。checkpointer 按 thread_id 保存
@@ -313,6 +319,7 @@ def run_chat(image: Image.Image, fields: dict[str, str]) -> dict[str, Any]:
                 "top_k": r.get("top_k", []),
                 "model_backbone": r.get("model_backbone"),
                 "evidence": r.get("evidence", {}),
+                "ensemble": r.get("ensemble"),
             }
             if "num_characters" in r:  # 多字投票结果
                 mode = "multi"
@@ -343,7 +350,6 @@ def run_chat(image: Image.Image, fields: dict[str, str]) -> dict[str, Any]:
     }
 
 
->>>>>>> origin/训练
 def run_single(image: Image.Image, *, use_tta: bool, use_cam: bool, use_rag: bool, prompt: str) -> dict[str, Any]:
     from image_quality import assess_image_quality
 
@@ -354,8 +360,6 @@ def run_single(image: Image.Image, *, use_tta: bool, use_cam: bool, use_rag: boo
     rgb = image.convert("RGB")
     ctx.finish(step, {"size": rgb.size, "preview": image_to_data_url(rgb)}, "图片读取成功")
 
-<<<<<<< HEAD
-=======
     step = ctx.add("detect_inversion", detail="检测是否为黑底白字拓印，若是则反转为白底黑字")
     from image_preprocess import detect_and_fix_inversion
 
@@ -364,7 +368,6 @@ def run_single(image: Image.Image, *, use_tta: bool, use_cam: bool, use_rag: boo
     detail = "检测为反色拓印，已自动反转" if inversion["was_inverted"] else "非反色，无需处理"
     ctx.finish(step, inversion, detail)
 
->>>>>>> origin/训练
     step = ctx.add("assess_image_quality", detail="评估泛黄、褪色、噪声和模糊")
     quality = assess_image_quality(__import__("numpy").array(rgb))
     result["quality"] = quality
@@ -381,6 +384,7 @@ def run_single(image: Image.Image, *, use_tta: bool, use_cam: bool, use_rag: boo
             "model_backbone": raw.get("model_backbone"),
             "num_classes": raw.get("num_classes"),
             "evidence": raw.get("evidence", {}),
+            "ensemble": raw.get("ensemble"),
         }
         result["recognition"] = recognition
         result["reliability"] = reliability_from(quality, float(recognition.get("confidence") or 0))
@@ -429,8 +433,6 @@ def run_multi(image: Image.Image, *, use_tta: bool, use_rag: bool, prompt: str) 
     step = ctx.add("extract_image", detail="读取上传图片并转换为 RGB")
     ctx.finish(step, {"size": rgb.size, "preview": image_to_data_url(rgb)}, "图片读取成功")
 
-<<<<<<< HEAD
-=======
     step = ctx.add("detect_inversion", detail="检测是否为黑底白字拓印，若是则反转为白底黑字")
     from image_preprocess import detect_and_fix_inversion
 
@@ -439,7 +441,6 @@ def run_multi(image: Image.Image, *, use_tta: bool, use_rag: bool, prompt: str) 
     detail = "检测为反色拓印，已自动反转" if inversion["was_inverted"] else "非反色，无需处理"
     ctx.finish(step, inversion, detail)
 
->>>>>>> origin/训练
     step = ctx.add("assess_image_quality", detail="评估图像退化程度")
     quality = assess_image_quality(np.array(rgb))
     result["quality"] = quality
@@ -477,7 +478,12 @@ def run_multi(image: Image.Image, *, use_tta: bool, use_rag: bool, prompt: str) 
             y2 = min(img_np.shape[0], y + h + pad)
             char_img = Image.fromarray(img_np[y1:y2, x1:x2])
             r = recognizer.recognize(char_img, tta=use_tta)
-            per_char.append({"name": r["calligrapher"], "confidence": r["confidence"], "bbox": [x, y, w, h]})
+            per_char.append({
+                "name": r["calligrapher"],
+                "confidence": r["confidence"],
+                "bbox": [x, y, w, h],
+                "ensemble": r.get("ensemble"),
+            })
 
         votes: dict[str, list[float]] = {}
         for item in per_char:
@@ -531,13 +537,14 @@ async def index(_: web.Request) -> web.FileResponse:
 
 
 async def health(_: web.Request) -> web.Response:
-    model_path = Path(os.environ.get("ZHIMO_MODEL_PATH", str(DEFAULT_MODEL_PATH)))
-    if not model_path.is_absolute():
-        model_path = PROJECT_ROOT / model_path
+    model_paths = resolve_model_paths()
+    model_exists = all(path.exists() for path in model_paths)
     data = {
         "project_root": str(PROJECT_ROOT),
-        "model_path": str(model_path),
-        "model_exists": model_path.exists(),
+        "model_path": os.pathsep.join(str(path) for path in model_paths),
+        "model_paths": [str(path) for path in model_paths],
+        "model_exists": model_exists,
+        "ensemble_enabled": len(model_paths) > 1,
         "chroma_db_exists": (PROJECT_ROOT / "chroma_db" / "chroma.sqlite3").exists(),
         "sample_images": sorted(p.name for p in (PROJECT_ROOT / "image_test").glob("*.png")) if (PROJECT_ROOT / "image_test").exists() else [],
         "python": sys.version.split()[0],
@@ -590,11 +597,7 @@ async def read_upload(request: web.Request) -> tuple[bytes, dict[str, str]]:
 
     if not image_bytes:
         raise UploadError("请上传图片。", error="missing_image")
-<<<<<<< HEAD
-    if fields.get("mode", "single") not in {"single", "multi"}:
-=======
     if fields.get("mode", "single") not in {"single", "multi", "chat"}:
->>>>>>> origin/训练
         raise UploadError("分析模式无效。", error="invalid_request")
     if any(fields.get(name, "false") not in {"true", "false"} for name in ("tta", "cam", "rag")):
         raise UploadError("分析选项无效。", error="invalid_request")
@@ -625,22 +628,15 @@ def decode_image(image_bytes: bytes) -> Image.Image:
 def analyze_image(image_bytes: bytes, fields: dict[str, str]) -> dict[str, Any]:
     # Image decoding, model inference and knowledge lookup all run in the worker.
     with decode_image(image_bytes) as image:
-<<<<<<< HEAD
-=======
         mode = fields.get("mode", "single")
         if mode == "chat":
             # 多轮对话模式：Agent 带记忆，每次带当前轮文字 + 图片
             return run_chat(image, fields)
->>>>>>> origin/训练
         use_tta = fields.get("tta", "false") == "true"
         use_cam = fields.get("cam", "true") == "true"
         use_rag = fields.get("rag", "true") == "true"
         prompt = fields.get("prompt", "")
-<<<<<<< HEAD
-        if fields.get("mode", "single") == "multi":
-=======
         if mode == "multi":
->>>>>>> origin/训练
             return run_multi(image, use_tta=use_tta, use_rag=use_rag, prompt=prompt)
         return run_single(image, use_tta=use_tta, use_cam=use_cam, use_rag=use_rag, prompt=prompt)
 
@@ -738,7 +734,9 @@ def main() -> None:
     port = find_port(args.port)
     print(f"Zhimo frontend running at http://{args.host}:{port}")
     print(f"Project root: {PROJECT_ROOT}")
-    print(f"Model path: {os.environ.get('ZHIMO_MODEL_PATH', str(DEFAULT_MODEL_PATH))}")
+    print("Model paths:")
+    for path in resolve_model_paths():
+        print(f"  - {path}")
     web.run_app(create_app(), host=args.host, port=port)
 
 

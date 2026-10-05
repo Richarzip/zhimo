@@ -7,10 +7,6 @@ const state = {
   controller: null,
   analyzing: false,
   validating: false,
-<<<<<<< HEAD
-};
-
-=======
   sessionId: newSessionId(),
   messages: [], // 对话记录 [{role, text, previewUrl, loading, data}]
 };
@@ -20,18 +16,14 @@ function newSessionId() {
   return 's-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
 }
 
->>>>>>> origin/训练
 const $ = (id) => document.getElementById(id);
 const MAX_UPLOAD_BYTES = 32 * 1024 * 1024;
 const MAX_IMAGE_PIXELS = 25_000_000;
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/bmp', 'image/x-ms-bmp', 'image/gif']);
 
-<<<<<<< HEAD
-=======
 const CHAT_EMPTY_HTML =
   '<div class="chat-empty" id="chatEmpty">上传书法图片或输入问题，与鉴赏 Agent 多轮对话。Agent 能记住同一会话中的上下文。</div>';
 
->>>>>>> origin/训练
 function setText(id, text) {
   $(id).textContent = text ?? '-';
 }
@@ -48,9 +40,13 @@ async function loadHealth() {
     const status = $('serverStatus');
     status.textContent = data.model_exists ? '服务就绪' : '缺少权重';
     status.className = `status-pill ${data.model_exists ? 'ok' : 'warn'}`;
+    const modelPaths = (data.model_paths?.length ? data.model_paths : [data.model_path])
+      .filter(Boolean)
+      .map(escapeHtml)
+      .join('<br>');
     $('envList').innerHTML = `
       <dt>模型权重</dt><dd>${formatBool(data.model_exists)}</dd>
-      <dt>权重路径</dt><dd>${escapeHtml(data.model_path)}</dd>
+      <dt>权重路径</dt><dd>${modelPaths}</dd>
       <dt>Chroma</dt><dd>${formatBool(data.chroma_db_exists)}</dd>
       <dt>Python</dt><dd>${escapeHtml(data.python)}</dd>
       <dt>样例图</dt><dd>${escapeHtml((data.sample_images || []).join(', ') || '-')}</dd>
@@ -89,14 +85,9 @@ function setupUpload() {
 }
 
 function updateAnalyzeButton() {
-<<<<<<< HEAD
-  $('analyzeBtn').disabled = !state.file || state.analyzing || state.validating;
-  $('analyzeBtn').textContent = state.analyzing ? 'Agent 调用中...' : '开始 Agent 调用';
-=======
   const canSend = Boolean(state.file) || $('prompt').value.trim();
   $('analyzeBtn').disabled = !canSend || state.analyzing || state.validating;
   $('analyzeBtn').textContent = state.analyzing ? '对话中...' : '发送';
->>>>>>> origin/训练
 }
 
 function cancelAnalysis() {
@@ -193,32 +184,15 @@ function setupModeButtons() {
 }
 
 async function analyze() {
-<<<<<<< HEAD
-  if (!state.file || state.analyzing || state.validating) return;
-=======
   if (state.analyzing || state.validating) return;
   const text = $('prompt').value.trim();
   if (!state.file && !text) return;
->>>>>>> origin/训练
   const requestId = ++state.requestId;
   const controller = new AbortController();
   state.controller = controller;
   state.analyzing = true;
   updateAnalyzeButton();
   $('runState').textContent = '运行中';
-<<<<<<< HEAD
-  renderTimeline([{ name: 'request', status: 'running', detail: '正在发送图片到本地服务' }]);
-  clearResult('正在分析...');
-
-  try {
-    const form = new FormData();
-    form.append('image', state.file);
-    form.append('mode', state.mode);
-    form.append('rag', String($('ragToggle').checked));
-    form.append('cam', String($('camToggle').checked));
-    form.append('tta', String($('ttaToggle').checked));
-    form.append('prompt', $('prompt').value);
-=======
   renderTimeline([{ name: 'request', status: 'running', detail: '正在发送消息到本地服务' }]);
 
   // 用户消息入对话流 + AI loading 占位
@@ -235,7 +209,6 @@ async function analyze() {
     form.append('cam', String($('camToggle').checked));
     form.append('tta', String($('ttaToggle').checked));
     form.append('prompt', text);
->>>>>>> origin/训练
 
     const res = await fetch('/api/analyze', { method: 'POST', body: form, signal: controller.signal });
     let data;
@@ -249,13 +222,6 @@ async function analyze() {
       throw new Error(`服务返回的数据格式不正确（HTTP ${res.status}）。`);
     }
     if (!res.ok || data.error) {
-<<<<<<< HEAD
-      renderResult({ ...data, message: data.message || `请求失败（HTTP ${res.status}）。` });
-      $('runState').textContent = '失败';
-      return;
-    }
-    renderResult(data);
-=======
       const message = data.message || `请求失败（HTTP ${res.status}）。`;
       renderResult({ ...data, message });
       pushAiMessage({ text: '', error: message });
@@ -267,16 +233,12 @@ async function analyze() {
     pushAiMessage({ text: data.reply || '', data });
     renderResult(data);
     $('prompt').value = '';
->>>>>>> origin/训练
     const partial = data.knowledge_diagnostic || data.recognition?.evidence?.error || data.steps?.some((step) => step.status === 'error');
     $('runState').textContent = data.blocked ? '已停止在可诊断节点' : partial ? '部分完成' : '完成';
   } catch (err) {
     if (requestId !== state.requestId || err.name === 'AbortError') return;
     const data = { error: 'browser_error', diagnostic: { message: '浏览器请求失败', raw: String(err) } };
-<<<<<<< HEAD
-=======
     pushAiMessage({ text: '', error: '浏览器请求失败' });
->>>>>>> origin/训练
     renderResult(data);
     $('runState').textContent = '失败';
   } finally {
@@ -305,8 +267,6 @@ function clearResult(summary = '上传图片后开始分析。') {
   $('rawJson').textContent = '{}';
 }
 
-<<<<<<< HEAD
-=======
 // ====================== 多轮对话渲染 ======================
 
 function pushUserMessage(text, previewUrl) {
@@ -463,7 +423,6 @@ function resetChat() {
   clearChat();
 }
 
->>>>>>> origin/训练
 function renderResult(data) {
   renderTimeline(data.steps || []);
   $('rawJson').textContent = JSON.stringify(data, null, 2);
@@ -558,18 +517,12 @@ function resetAll() {
   clearFile();
   state.validating = false;
   showUploadError();
-<<<<<<< HEAD
-=======
   $('prompt').value = '';
->>>>>>> origin/训练
   updateAnalyzeButton();
   $('runState').textContent = '等待输入';
   renderTimeline([]);
   clearResult();
-<<<<<<< HEAD
-=======
   clearChat();
->>>>>>> origin/训练
 }
 
 function boot() {
@@ -577,15 +530,12 @@ function boot() {
   setupModeButtons();
   $('analyzeBtn').addEventListener('click', analyze);
   $('resetBtn').addEventListener('click', resetAll);
-<<<<<<< HEAD
-  renderTimeline([]);
-=======
   $('newChatBtn').addEventListener('click', resetChat);
   $('prompt').addEventListener('input', updateAnalyzeButton);
   renderTimeline([]);
   clearChat();
->>>>>>> origin/训练
   loadHealth();
 }
 
 boot();
+
