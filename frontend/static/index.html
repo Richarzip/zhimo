@@ -23,11 +23,12 @@
       </div>
 
       <label class="dropzone" id="dropzone">
-        <input id="imageInput" type="file" accept="image/*" />
-        <span class="drop-icon">＋</span>
-        <strong>上传书法图片</strong>
-        <small>支持单字、多字作品；本地服务处理，不上传外网</small>
+        <input id="imageInput" type="file" accept="image/jpeg,image/png,image/webp,image/bmp,image/gif,.jpg,.jpeg,.png,.webp,.bmp,.gif" aria-labelledby="uploadLabel" aria-describedby="uploadHelp uploadError" />
+        <span class="drop-icon" aria-hidden="true">＋</span>
+        <strong id="uploadLabel">上传书法图片</strong>
+        <small id="uploadHelp">支持 JPEG、PNG、WEBP、BMP、GIF；单张不超过 32 MiB、2500 万像素；本地服务处理，不上传外网</small>
       </label>
+      <p id="uploadError" class="upload-error hidden" role="alert"></p>
 
       <div class="preview-wrap hidden" id="previewWrap">
         <img id="preview" alt="上传预览" />
@@ -72,7 +73,7 @@
     <section class="panel output-panel">
       <div class="section-title">
         <h2>Agent 过程</h2>
-        <span id="runState" class="muted">等待输入</span>
+        <span id="runState" class="muted" role="status">等待输入</span>
       </div>
       <ol class="timeline" id="timeline"></ol>
     </section>

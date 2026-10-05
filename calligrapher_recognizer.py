@@ -207,19 +207,10 @@ class CalligrapherRecognizer:
 
     # ---------- 带 Grad-CAM ----------
 
-    def predict_with_cam(self, image: Image.Image) -> dict:
-        """带 Grad-CAM 热力图的识别。"""
-        self._load_model()
-
+    def predict_with_cam(self, image: Image.Image, tta: bool = False) -> dict:
+        """带 Grad-CAM 热力图的识别，热力图解释最终（可含 TTA）预测类别。"""
         img = image.convert("RGB") if image.mode != "RGB" else image
-        img_tensor = self.transform(img).unsqueeze(0).to(self.device)
-
-        # 常规识别（不需要梯度）
-        with torch.no_grad():
-            logits = self.model(img_tensor)
-            probs = torch.softmax(logits, dim=-1).squeeze(0)
-            top_idx = probs.argmax().item()
-            result = self._build_result_from_probs(probs)
+        result = self.recognize(img, tta=tta)
 
         # Grad-CAM（惰性导入，缺库不影响普通识别）
         try:
@@ -227,6 +218,9 @@ class CalligrapherRecognizer:
             from pytorch_grad_cam.utils.image import show_cam_on_image
             from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 
+            img_tensor = self.transform(img).unsqueeze(0).to(self.device)
+            # TTA 可能改变获胜类别；热力图在原图上解释最终选中的书法家。
+            top_idx = self.label_to_id[result["calligrapher"]]
             target_layers = self._get_target_layers()
             targets = [ClassifierOutputTarget(top_idx)]
             cam = GradCAM(model=self.model, target_layers=target_layers)

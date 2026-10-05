@@ -1,25 +1,33 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import base64
 import json
 import os
 import socket
 import sys
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-from aiohttp import web
-from PIL import Image, ImageDraw
+from aiohttp import BodyPartReader, web
+from PIL import Image, ImageDraw, UnidentifiedImageError
 
 
 FRONTEND_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = FRONTEND_DIR.parent
 STATIC_DIR = FRONTEND_DIR / "static"
 DEFAULT_MODEL_PATH = PROJECT_ROOT / "checkpoints" / "convnext.pth"
+MAX_IMAGE_BYTES = 32 * 1024 * 1024
+MAX_FIELD_BYTES = 16 * 1024
+MAX_REQUEST_BYTES = MAX_IMAGE_BYTES + 64 * 1024
+MAX_IMAGE_PIXELS = 25_000_000
+ALLOWED_IMAGE_FORMATS = frozenset({"JPEG", "PNG", "WEBP", "BMP", "GIF"})
+UPLOAD_FIELDS = frozenset({"mode", "tta", "cam", "rag", "prompt"})
 
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -196,7 +204,7 @@ def run_single(image: Image.Image, *, use_tta: bool, use_cam: bool, use_rag: boo
     step = ctx.add("analyze_calligraphy", detail="加载分类模型并开始单字推理")
     try:
         recognizer = get_recognizer()
-        raw = recognizer.predict_with_cam(rgb) if use_cam else recognizer.recognize(rgb, tta=use_tta)
+        raw = recognizer.predict_with_cam(rgb, tta=use_tta) if use_cam else recognizer.recognize(rgb, tta=use_tta)
         recognition = {
             "calligrapher": raw.get("calligrapher"),
             "confidence": raw.get("confidence"),
@@ -221,7 +229,7 @@ def run_single(image: Image.Image, *, use_tta: bool, use_cam: bool, use_rag: boo
         try:
             from calligrapher_tool import search_knowledge
 
-            query = prompt.strip() or f"{result['recognition']['calligrapher']} 书法风格特点"
+            query = f"{result['recognition']['calligrapher']} 书法风格特点 {prompt.strip()}".strip()
             knowledge = search_knowledge.invoke({"query": query})
             result["knowledge"] = knowledge
             ctx.finish(step, knowledge, "知识库检索完成")
@@ -322,7 +330,7 @@ def run_multi(image: Image.Image, *, use_tta: bool, use_rag: bool, prompt: str) 
         try:
             from calligrapher_tool import search_knowledge
 
-            query = prompt.strip() or f"{result['recognition']['calligrapher']} 书法风格特点"
+            query = f"{result['recognition']['calligrapher']} 书法风格特点 {prompt.strip()}".strip()
             knowledge = search_knowledge.invoke({"query": query})
             result["knowledge"] = knowledge
             ctx.finish(step, knowledge, "知识库检索完成")
@@ -357,38 +365,160 @@ async def health(_: web.Request) -> web.Response:
     return json_response(data)
 
 
-async def analyze(request: web.Request) -> web.Response:
+class UploadError(Exception):
+    def __init__(self, message: str, *, status: int = 400, error: str = "invalid_image") -> None:
+        super().__init__(message)
+        self.status = status
+        self.error = error
+
+
+async def read_upload(request: web.Request) -> tuple[bytes, dict[str, str]]:
+    if request.content_length is not None and request.content_length > MAX_REQUEST_BYTES:
+        raise UploadError("上传请求过大，图片不能超过 32 MiB。", status=413, error="upload_too_large")
+    if request.content_type != "multipart/form-data":
+        raise UploadError("请使用图片上传表单。", error="invalid_request")
+
+    fields: dict[str, str] = {}
+    image_bytes: bytes | None = None
+    seen: set[str] = set()
     try:
         reader = await request.multipart()
-        fields: dict[str, str] = {}
-        image_bytes: bytes | None = None
         async for part in reader:
-            if part.name == "image":
-                image_bytes = await part.read()
+            if not isinstance(part, BodyPartReader):
+                raise UploadError("不支持嵌套上传表单。", error="invalid_request")
+            name = part.name
+            if name not in UPLOAD_FIELDS and name != "image":
+                raise UploadError("上传表单包含未知字段。", error="invalid_request")
+            if name in seen:
+                raise UploadError("上传表单包含重复字段。", error="invalid_request")
+            seen.add(name)
+            limit = MAX_IMAGE_BYTES if name == "image" else MAX_FIELD_BYTES
+            value = bytearray()
+            while chunk := await part.read_chunk():
+                if len(value) + len(chunk) > limit or request.content.total_bytes > MAX_REQUEST_BYTES:
+                    message = "图片不能超过 32 MiB。" if name == "image" else "上传表单字段过长。"
+                    raise UploadError(message, status=413, error="upload_too_large")
+                value.extend(chunk)
+            if name == "image":
+                image_bytes = bytes(value)
             else:
-                fields[part.name or ""] = (await part.text()).strip()
-        if not image_bytes:
-            return json_response({"error": "missing_image", "message": "请上传图片。"}, status=400)
+                fields[name] = value.decode("utf-8").strip()
+        if request.content.total_bytes > MAX_REQUEST_BYTES:
+            raise UploadError("上传请求过大。", status=413, error="upload_too_large")
+    except (AssertionError, ValueError, UnicodeError) as exc:
+        raise UploadError("上传表单无效，请重新选择图片。", error="invalid_request") from exc
 
+    if not image_bytes:
+        raise UploadError("请上传图片。", error="missing_image")
+    if fields.get("mode", "single") not in {"single", "multi"}:
+        raise UploadError("分析模式无效。", error="invalid_request")
+    if any(fields.get(name, "false") not in {"true", "false"} for name in ("tta", "cam", "rag")):
+        raise UploadError("分析选项无效。", error="invalid_request")
+    return image_bytes, fields
+
+
+def decode_image(image_bytes: bytes) -> Image.Image:
+    try:
+        with Image.open(BytesIO(image_bytes)) as probe:
+            if probe.format not in ALLOWED_IMAGE_FORMATS:
+                raise UploadError("仅支持 JPEG、PNG、WEBP、BMP 和 GIF 图片。")
+            if probe.width * probe.height > MAX_IMAGE_PIXELS:
+                raise UploadError("图片不能超过 2500 万像素。", status=413, error="image_too_large")
+            probe.verify()
         image = Image.open(BytesIO(image_bytes))
-        mode = fields.get("mode", "single")
+        try:
+            image.load()
+        except BaseException:
+            image.close()
+            raise
+        return image
+    except Image.DecompressionBombError as exc:
+        raise UploadError("图片不能超过 2500 万像素。", status=413, error="image_too_large") from exc
+    except (UnidentifiedImageError, OSError, ValueError, SyntaxError) as exc:
+        raise UploadError("图片无法解码，文件可能已损坏或不是支持的图片。") from exc
+
+
+def analyze_image(image_bytes: bytes, fields: dict[str, str]) -> dict[str, Any]:
+    # Image decoding, model inference and knowledge lookup all run in the worker.
+    with decode_image(image_bytes) as image:
         use_tta = fields.get("tta", "false") == "true"
         use_cam = fields.get("cam", "true") == "true"
         use_rag = fields.get("rag", "true") == "true"
         prompt = fields.get("prompt", "")
+        if fields.get("mode", "single") == "multi":
+            return run_multi(image, use_tta=use_tta, use_rag=use_rag, prompt=prompt)
+        return run_single(image, use_tta=use_tta, use_cam=use_cam, use_rag=use_rag, prompt=prompt)
 
-        if mode == "multi":
-            result = run_multi(image, use_tta=use_tta, use_rag=use_rag, prompt=prompt)
-        else:
-            result = run_single(image, use_tta=use_tta, use_cam=use_cam, use_rag=use_rag, prompt=prompt)
+
+class AnalysisWorker:
+    """One upload/job at a time, without an unbounded executor queue."""
+
+    def __init__(self) -> None:
+        self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="zhimo-analysis")
+        self.busy = False
+        self.closing = False
+
+    def claim(self) -> bool:
+        if self.busy or self.closing:
+            return False
+        self.busy = True
+        return True
+
+    def release(self) -> None:
+        self.busy = False
+
+    def submit(self, image_bytes: bytes, fields: dict[str, str]) -> asyncio.Future:
+        loop = asyncio.get_running_loop()
+        job = self.executor.submit(analyze_image, image_bytes, fields)
+        # Only the actual thread completion frees the slot, even if the HTTP
+        # handler was cancelled while awaiting this job.
+        job.add_done_callback(lambda _: loop.call_soon_threadsafe(self.release))
+        future = asyncio.wrap_future(job)
+        # A disconnected request may never retrieve a worker exception.
+        future.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        return future
+
+    async def close(self) -> None:
+        self.closing = True
+        await asyncio.to_thread(self.executor.shutdown, wait=True, cancel_futures=True)
+
+
+ANALYSIS_WORKER_KEY = web.AppKey("analysis_worker", AnalysisWorker)
+
+
+async def analysis_worker_context(app: web.Application):
+    worker = AnalysisWorker()
+    app[ANALYSIS_WORKER_KEY] = worker
+    try:
+        yield
+    finally:
+        await worker.close()
+
+
+async def analyze(request: web.Request) -> web.Response:
+    worker = request.app[ANALYSIS_WORKER_KEY]
+    if not worker.claim():
+        return json_response({"error": "server_busy", "message": "已有图片正在处理，请稍后重试。"}, status=503)
+    submitted = False
+    try:
+        image_bytes, fields = await read_upload(request)
+        future = worker.submit(image_bytes, fields)
+        submitted = True
+        result = await asyncio.shield(future)
         return json_response(result)
+    except UploadError as exc:
+        return json_response({"error": exc.error, "message": str(exc)}, status=exc.status)
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         return json_response({"error": "server_error", "diagnostic": classify_exception(exc)}, status=500)
+    finally:
+        if not submitted:
+            worker.release()
 
 
 def create_app() -> web.Application:
-    app = web.Application(client_max_size=32 * 1024 * 1024)
+    app = web.Application(client_max_size=MAX_REQUEST_BYTES)
+    app.cleanup_ctx.append(analysis_worker_context)
     app.router.add_get("/", index)
     app.router.add_get("/api/health", health)
     app.router.add_post("/api/analyze", analyze)
