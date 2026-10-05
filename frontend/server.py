@@ -1,0 +1,421 @@
+from __future__ import annotations
+
+import argparse
+import base64
+import json
+import os
+import socket
+import sys
+import traceback
+from dataclasses import dataclass, field
+from io import BytesIO
+from pathlib import Path
+from typing import Any
+
+from aiohttp import web
+from PIL import Image, ImageDraw
+
+
+FRONTEND_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = FRONTEND_DIR.parent
+STATIC_DIR = FRONTEND_DIR / "static"
+DEFAULT_MODEL_PATH = PROJECT_ROOT / "checkpoints" / "convnext.pth"
+
+sys.path.insert(0, str(PROJECT_ROOT))
+
+
+@dataclass
+class Step:
+    name: str
+    status: str = "pending"
+    detail: str = ""
+    data: Any = None
+    error: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "status": self.status,
+            "detail": self.detail,
+            "data": self.data,
+            "error": self.error,
+        }
+
+
+@dataclass
+class RunContext:
+    steps: list[Step] = field(default_factory=list)
+
+    def add(self, name: str, status: str = "running", detail: str = "") -> Step:
+        step = Step(name=name, status=status, detail=detail)
+        self.steps.append(step)
+        return step
+
+    def finish(self, step: Step, data: Any = None, detail: str = "") -> None:
+        step.status = "ok"
+        step.data = data
+        if detail:
+            step.detail = detail
+
+    def fail(self, step: Step, exc: BaseException, detail: str = "") -> None:
+        step.status = "error"
+        step.error = str(exc)
+        step.detail = detail or classify_exception(exc)["message"]
+        step.data = classify_exception(exc)
+
+
+def json_response(data: dict[str, Any], status: int = 200) -> web.Response:
+    return web.Response(
+        text=json.dumps(data, ensure_ascii=False),
+        status=status,
+        content_type="application/json",
+    )
+
+
+def image_to_data_url(image: Image.Image, fmt: str = "PNG") -> str:
+    buf = BytesIO()
+    image.save(buf, format=fmt)
+    b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+    return f"data:image/{fmt.lower()};base64,{b64}"
+
+
+def overlay_boxes(image: Image.Image, boxes: list[list[int]] | list[tuple[int, int, int, int]]) -> str:
+    canvas = image.convert("RGB").copy()
+    draw = ImageDraw.Draw(canvas)
+    for idx, box in enumerate(boxes, start=1):
+        x, y, w, h = [int(v) for v in box]
+        draw.rectangle([x, y, x + w, y + h], outline=(24, 119, 242), width=3)
+        draw.rectangle([x, max(0, y - 18), x + 26, y], fill=(24, 119, 242))
+        draw.text((x + 4, max(0, y - 17)), str(idx), fill=(255, 255, 255))
+    return image_to_data_url(canvas)
+
+
+def classify_exception(exc: BaseException) -> dict[str, Any]:
+    text = str(exc)
+    if isinstance(exc, FileNotFoundError) or "权重" in text or "convnext.pth" in text or ".pth" in text:
+        return {
+            "kind": "missing_model_weight",
+            "message": "已成功运行到模型推理入口，但未找到模型权重。补齐权重后可继续推理。",
+            "suggestion": "将权重放到 zhimo/checkpoints/convnext.pth，或启动服务时设置 ZHIMO_MODEL_PATH。",
+            "raw": text,
+        }
+    if "Ollama" in text or "bge-m3" in text or "Connection refused" in text:
+        return {
+            "kind": "rag_unavailable",
+            "message": "知识库检索不可用，通常是 Ollama 未启动或 bge-m3 未拉取。",
+            "suggestion": "运行 ollama pull bge-m3，并确认 Ollama 服务已启动。",
+            "raw": text,
+        }
+    if "No module named 'pytorch_grad_cam'" in text or "pytorch_grad_cam" in text:
+        return {
+            "kind": "cam_dependency_missing",
+            "message": "Grad-CAM 依赖缺失，普通识别不受影响。",
+            "suggestion": "在环境中安装 python -m pip install grad-cam。",
+            "raw": text,
+        }
+    return {
+        "kind": "runtime_error",
+        "message": "运行阶段出现异常。",
+        "suggestion": "查看 raw 字段和服务端日志定位。",
+        "raw": text,
+    }
+
+
+def top_k(all_probabilities: dict[str, float], k: int = 3) -> list[dict[str, Any]]:
+    return [
+        {"name": name, "confidence": score}
+        for name, score in sorted(all_probabilities.items(), key=lambda item: item[1], reverse=True)[:k]
+    ]
+
+
+def reliability_from(quality: dict[str, float], confidence: float) -> str:
+    q = float(quality.get("overall", 1.0))
+    c = float(confidence)
+    if q < 0.3 and c > 0.7:
+        return "high"
+    if q < 0.5 or c > 0.5:
+        return "medium"
+    return "low"
+
+
+def build_summary(result: dict[str, Any]) -> str:
+    if result.get("blocked"):
+        diag = result.get("diagnostic") or {}
+        return diag.get("message", "流程已运行，但在某一步停止。")
+
+    recognition = result.get("recognition") or {}
+    calligrapher = recognition.get("calligrapher")
+    confidence = recognition.get("confidence")
+    quality = result.get("quality") or {}
+    reliability = result.get("reliability") or "unknown"
+    knowledge = result.get("knowledge")
+
+    if not calligrapher:
+        return "已完成图像预处理，但没有得到书法家识别结论。"
+
+    parts = [f"本次本地 Agent 判断最可能的书法家为：{calligrapher}。"]
+    if confidence is not None:
+        parts.append(f"模型置信度为 {confidence}，综合可靠性评级为 {reliability}。")
+    if quality:
+        parts.append(
+            "图像质量评估："
+            f"泛黄 {quality.get('yellow')}、褪色 {quality.get('fade')}、"
+            f"噪声 {quality.get('noise')}、模糊 {quality.get('blur')}、综合退化 {quality.get('overall')}。"
+        )
+    if recognition.get("evidence", {}).get("attention_note"):
+        parts.append(f"可解释性提示：{recognition['evidence']['attention_note']}。")
+    if knowledge:
+        parts.append("知识库检索已返回相关风格材料，可结合 Top-K 候选和热力图进一步解释。")
+    return "".join(parts)
+
+
+def get_recognizer():
+    from calligrapher_recognizer import CalligrapherRecognizer
+
+    model_path = Path(os.environ.get("ZHIMO_MODEL_PATH", str(DEFAULT_MODEL_PATH)))
+    if not model_path.is_absolute():
+        model_path = PROJECT_ROOT / model_path
+    return CalligrapherRecognizer(model_path=str(model_path))
+
+
+def run_single(image: Image.Image, *, use_tta: bool, use_cam: bool, use_rag: bool, prompt: str) -> dict[str, Any]:
+    from image_quality import assess_image_quality
+
+    ctx = RunContext()
+    result: dict[str, Any] = {"mode": "single"}
+
+    step = ctx.add("extract_image", detail="读取上传图片并转换为 RGB")
+    rgb = image.convert("RGB")
+    ctx.finish(step, {"size": rgb.size, "preview": image_to_data_url(rgb)}, "图片读取成功")
+
+    step = ctx.add("assess_image_quality", detail="评估泛黄、褪色、噪声和模糊")
+    quality = assess_image_quality(__import__("numpy").array(rgb))
+    result["quality"] = quality
+    ctx.finish(step, quality, "图像质量评估完成")
+
+    step = ctx.add("analyze_calligraphy", detail="加载分类模型并开始单字推理")
+    try:
+        recognizer = get_recognizer()
+        raw = recognizer.predict_with_cam(rgb) if use_cam else recognizer.recognize(rgb, tta=use_tta)
+        recognition = {
+            "calligrapher": raw.get("calligrapher"),
+            "confidence": raw.get("confidence"),
+            "top_k": top_k(raw.get("all_probabilities", {})),
+            "model_backbone": raw.get("model_backbone"),
+            "num_classes": raw.get("num_classes"),
+            "evidence": raw.get("evidence", {}),
+        }
+        result["recognition"] = recognition
+        result["reliability"] = reliability_from(quality, float(recognition.get("confidence") or 0))
+        ctx.finish(step, recognition, "模型推理完成")
+    except Exception as exc:  # noqa: BLE001 - returned as UI diagnostic intentionally
+        ctx.fail(step, exc)
+        result["blocked"] = True
+        result["diagnostic"] = classify_exception(exc)
+        result["summary"] = build_summary(result)
+        result["steps"] = [s.to_dict() for s in ctx.steps]
+        return result
+
+    if use_rag:
+        step = ctx.add("search_knowledge", detail="按识别结果检索书法家风格知识")
+        try:
+            from calligrapher_tool import search_knowledge
+
+            query = prompt.strip() or f"{result['recognition']['calligrapher']} 书法风格特点"
+            knowledge = search_knowledge.invoke({"query": query})
+            result["knowledge"] = knowledge
+            ctx.finish(step, knowledge, "知识库检索完成")
+        except Exception as exc:  # noqa: BLE001
+            ctx.fail(step, exc)
+            result["knowledge_diagnostic"] = classify_exception(exc)
+    else:
+        ctx.add("search_knowledge", status="skipped", detail="用户关闭了知识库检索")
+
+    step = ctx.add("compose_answer", detail="综合工具返回结果生成本地回答")
+    result["summary"] = build_summary(result)
+    ctx.finish(step, {"summary": result["summary"]}, "回答生成完成")
+
+    result["steps"] = [s.to_dict() for s in ctx.steps]
+    return result
+
+
+def run_multi(image: Image.Image, *, use_tta: bool, use_rag: bool, prompt: str) -> dict[str, Any]:
+    from image_quality import assess_image_quality
+    from segment import segment_auto
+
+    import numpy as np
+
+    ctx = RunContext()
+    result: dict[str, Any] = {"mode": "multi"}
+    rgb = image.convert("RGB")
+
+    step = ctx.add("extract_image", detail="读取上传图片并转换为 RGB")
+    ctx.finish(step, {"size": rgb.size, "preview": image_to_data_url(rgb)}, "图片读取成功")
+
+    step = ctx.add("assess_image_quality", detail="评估图像退化程度")
+    quality = assess_image_quality(np.array(rgb))
+    result["quality"] = quality
+    ctx.finish(step, quality, "图像质量评估完成")
+
+    step = ctx.add("analyze_multi_char.segment", detail="调用传统图像处理切分多字作品")
+    seg = segment_auto(np.array(rgb))
+    boxes = [list(map(int, b)) for b in seg.get("boxes", [])]
+    seg_payload = {
+        "method": seg.get("method"),
+        "num_boxes": len(boxes),
+        "boxes": boxes,
+        "overlay": overlay_boxes(rgb, boxes) if boxes else None,
+    }
+    result["segmentation"] = seg_payload
+    ctx.finish(step, seg_payload, f"切分完成，检测到 {len(boxes)} 个候选字符")
+
+    if not boxes:
+        result["blocked"] = True
+        result["diagnostic"] = {"kind": "segmentation_empty", "message": "未检测到字符区域。", "suggestion": "换用更清晰或对比度更高的书法图片。"}
+        result["summary"] = build_summary(result)
+        result["steps"] = [s.to_dict() for s in ctx.steps]
+        return result
+
+    step = ctx.add("analyze_multi_char.recognize", detail="逐字调用书法家分类模型")
+    try:
+        recognizer = get_recognizer()
+        per_char = []
+        img_np = np.array(rgb)
+        for x, y, w, h in boxes:
+            pad = 4
+            x1 = max(0, x - pad)
+            y1 = max(0, y - pad)
+            x2 = min(img_np.shape[1], x + w + pad)
+            y2 = min(img_np.shape[0], y + h + pad)
+            char_img = Image.fromarray(img_np[y1:y2, x1:x2])
+            r = recognizer.recognize(char_img, tta=use_tta)
+            per_char.append({"name": r["calligrapher"], "confidence": r["confidence"], "bbox": [x, y, w, h]})
+
+        votes: dict[str, list[float]] = {}
+        for item in per_char:
+            votes.setdefault(item["name"], []).append(float(item["confidence"]))
+        scores = {name: len(vals) * (sum(vals) / len(vals)) for name, vals in votes.items()}
+        best_name = max(scores, key=scores.get)
+        avg_conf = sum(votes[best_name]) / len(votes[best_name])
+        consistency_ratio = len(votes[best_name]) / max(1, len(per_char))
+        consistency = "high" if consistency_ratio > 0.7 else "medium" if consistency_ratio > 0.4 else "low"
+        recognition = {
+            "calligrapher": best_name,
+            "confidence": round(avg_conf, 4),
+            "per_char_results": per_char,
+            "vote_distribution": {name: len(vals) for name, vals in votes.items()},
+            "consistency": consistency,
+        }
+        result["recognition"] = recognition
+        result["reliability"] = consistency
+        ctx.finish(step, recognition, "逐字识别和投票完成")
+    except Exception as exc:  # noqa: BLE001
+        ctx.fail(step, exc)
+        result["blocked"] = True
+        result["diagnostic"] = classify_exception(exc)
+        result["summary"] = build_summary(result)
+        result["steps"] = [s.to_dict() for s in ctx.steps]
+        return result
+
+    if use_rag:
+        step = ctx.add("search_knowledge", detail="按投票结果检索书法家风格知识")
+        try:
+            from calligrapher_tool import search_knowledge
+
+            query = prompt.strip() or f"{result['recognition']['calligrapher']} 书法风格特点"
+            knowledge = search_knowledge.invoke({"query": query})
+            result["knowledge"] = knowledge
+            ctx.finish(step, knowledge, "知识库检索完成")
+        except Exception as exc:  # noqa: BLE001
+            ctx.fail(step, exc)
+            result["knowledge_diagnostic"] = classify_exception(exc)
+
+    step = ctx.add("compose_answer", detail="综合工具返回结果生成本地回答")
+    result["summary"] = build_summary(result)
+    ctx.finish(step, {"summary": result["summary"]}, "回答生成完成")
+
+    result["steps"] = [s.to_dict() for s in ctx.steps]
+    return result
+
+
+async def index(_: web.Request) -> web.FileResponse:
+    return web.FileResponse(STATIC_DIR / "index.html")
+
+
+async def health(_: web.Request) -> web.Response:
+    model_path = Path(os.environ.get("ZHIMO_MODEL_PATH", str(DEFAULT_MODEL_PATH)))
+    if not model_path.is_absolute():
+        model_path = PROJECT_ROOT / model_path
+    data = {
+        "project_root": str(PROJECT_ROOT),
+        "model_path": str(model_path),
+        "model_exists": model_path.exists(),
+        "chroma_db_exists": (PROJECT_ROOT / "chroma_db" / "chroma.sqlite3").exists(),
+        "sample_images": sorted(p.name for p in (PROJECT_ROOT / "image_test").glob("*.png")) if (PROJECT_ROOT / "image_test").exists() else [],
+        "python": sys.version.split()[0],
+    }
+    return json_response(data)
+
+
+async def analyze(request: web.Request) -> web.Response:
+    try:
+        reader = await request.multipart()
+        fields: dict[str, str] = {}
+        image_bytes: bytes | None = None
+        async for part in reader:
+            if part.name == "image":
+                image_bytes = await part.read()
+            else:
+                fields[part.name or ""] = (await part.text()).strip()
+        if not image_bytes:
+            return json_response({"error": "missing_image", "message": "请上传图片。"}, status=400)
+
+        image = Image.open(BytesIO(image_bytes))
+        mode = fields.get("mode", "single")
+        use_tta = fields.get("tta", "false") == "true"
+        use_cam = fields.get("cam", "true") == "true"
+        use_rag = fields.get("rag", "true") == "true"
+        prompt = fields.get("prompt", "")
+
+        if mode == "multi":
+            result = run_multi(image, use_tta=use_tta, use_rag=use_rag, prompt=prompt)
+        else:
+            result = run_single(image, use_tta=use_tta, use_cam=use_cam, use_rag=use_rag, prompt=prompt)
+        return json_response(result)
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return json_response({"error": "server_error", "diagnostic": classify_exception(exc)}, status=500)
+
+
+def create_app() -> web.Application:
+    app = web.Application(client_max_size=32 * 1024 * 1024)
+    app.router.add_get("/", index)
+    app.router.add_get("/api/health", health)
+    app.router.add_post("/api/analyze", analyze)
+    app.router.add_static("/static/", STATIC_DIR, show_index=False)
+    return app
+
+
+def find_port(preferred: int) -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        if sock.connect_ex(("127.0.0.1", preferred)) != 0:
+            return preferred
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Zhimo local frontend server")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8765)
+    args = parser.parse_args()
+    port = find_port(args.port)
+    print(f"Zhimo frontend running at http://{args.host}:{port}")
+    print(f"Project root: {PROJECT_ROOT}")
+    print(f"Model path: {os.environ.get('ZHIMO_MODEL_PATH', str(DEFAULT_MODEL_PATH))}")
+    web.run_app(create_app(), host=args.host, port=port)
+
+
+if __name__ == "__main__":
+    main()

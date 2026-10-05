@@ -3,3 +3,5 @@
 checkpoints/
 *.pth
 API.txt
+__pycache__/
+*.pyc
