@@ -18,7 +18,7 @@ from urllib.parse import parse_qsl
 from urllib.request import urlopen
 
 from aiohttp import BodyPartReader, web
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 
 FRONTEND_DIR = Path(__file__).resolve().parent
@@ -430,10 +430,12 @@ def decode_image(image_bytes: bytes) -> Image.Image:
         image = Image.open(BytesIO(image_bytes))
         try:
             image.load()
+            oriented = ImageOps.exif_transpose(image)
         except BaseException:
             image.close()
             raise
-        return image
+        image.close()
+        return oriented
     except Image.DecompressionBombError as exc:
         raise UploadError("图片不能超过 2500 万像素。", status=413, error="image_too_large") from exc
     except (UnidentifiedImageError, OSError, ValueError, SyntaxError) as exc:
@@ -456,8 +458,7 @@ def analyze_image(image_bytes: bytes | None, fields: dict[str, str]) -> dict[str
         use_pdf = fields.get("pdf", "false") == "true"
         prompt = fields.get("prompt", "")
         extra = {}
-        if "denoise" in fields:
-            extra["use_denoise"] = use_denoise
+        extra["use_denoise"] = use_denoise
         if "examples" in fields:
             extra["use_examples"] = use_examples
         if "pdf" in fields:

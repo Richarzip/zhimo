@@ -139,6 +139,69 @@ from zhimo.agent import create_calligraphy_agent
 agent = create_calligraphy_agent()
 ```
 
+## 图片自动去噪
+
+网页默认开启“自动去噪”。单字、多字和 Agent 上传流程共用
+`zhimo.vision.denoise.denoise_image`，使用本地 OpenCV，不需要额外权重或 API。
+关闭开关会跳过去噪；HTTP 的 `denoise` 字段接受 `true` / `false`，省略时默认开启。
+上传时先按 EXIF 方向摆正图片，关闭去噪也会处理方向。
+
+默认 `adaptive` 模式先诊断，再按需组合以下步骤：
+
+| 检测情况 | 处理方式与限制 |
+| --- | --- |
+| 无明显可处理退化，或短边不足 16 像素 | 返回摆正方向后的 RGB 原图，不做滤波 |
+| 孤立脉冲噪点 | 仅替换明显偏离周围像素的点，取 3×3 中值；至少 8 点且占比达到 0.05% 才启用 |
+| 平坦区域存在连续噪声 | 双边滤波，强度随估计噪声调整；短边不足 1000 时邻域为 5，否则为 7；对墨迹及相邻边缘减弱滤波 |
+| 纸面光照不均 | 分块估计纸面亮度并平滑插值；局部提亮最多 1.25 倍，笔画两侧使用连续增益以避免光晕 |
+| 有可分辨但对比度偏低的墨迹 | 仅在 LAB 亮度通道做温和对比度拉伸，单次亮度调整最多 8/255，保持色度通道 |
+
+噪声使用局部平坦区域的高通残差 MAD 估计；墨迹掩膜按纸面亮度差和噪声水平构造，
+边缘羽化后与原图融合。处理后的原墨迹平均亮度变化若超过 6%，或墨迹保留比例低于 97%，
+会放弃该候选并返回原图。诊断和处理会临时归一化黑底白字拓印，返回时恢复其极性，
+以便后续反色检测仍能正确记录拓印信息。输出保留摆正方向后的尺寸，不缩小原图。
+
+```python
+from PIL import Image
+from zhimo.vision.denoise import denoise_image
+
+with Image.open("image_test/test.png") as image:
+    processed, info = denoise_image(image)  # 默认 adaptive
+    basic, basic_info = denoise_image(image, mode="basic")
+
+print(info["applied"], info["reason"], info["steps"])
+print(info["quality_before"], info["quality_after"])
+processed.save("denoised.png")
+```
+
+`basic` 保留旧的“3×3 中值 + 双边滤波 + LAB 亮度 CLAHE”像素处理，供对照实验使用；
+网页开启去噪时使用 `adaptive`。新增诊断包含实际处理步骤、参数、处理前后指标以及笔画变化：
+
+- `enabled` 表示调用了去噪；`applied` 表示滤波或亮度处理实际改变了像素，不包含 EXIF 方向调整。
+- `reason` 包括 `no_actionable_degradation`、`image_too_small`、`degradation_detected`、`stroke_guard_reverted`、`basic_requested`。
+- `quality_before` / `quality_after` 在同一归一化极性下测量；`noise_sigma`、`background_variation`、`ink_contrast` 为 0–255 灰度尺度，`impulse_ratio`、`ink_fraction` 为 0–1 比例；`laplacian_variance` 是拉普拉斯响应方差，不是噪声概率。
+- `stroke_change` 为原墨迹区域平均灰度变化除以 255；`stroke_retention` 为原墨迹位置仍保留至少 70% 纸墨亮度差的比例，无墨迹时为 `null`。这些是保护性启发式，不能证明所有笔锋、飞白均未受影响。
+- 若保护检查触发回退，`rejected_candidate` 记录被放弃的步骤、指标和笔画变化，前后主指标则对应实际返回的原图。
+- 这些前后指标位于 HTTP 响应的 `denoise` 对象内；原有顶层 `quality` 仍描述后续识别实际使用的图片。
+
+此版本不自动漂白均匀泛黄的纸张，不生成或补画笔画，也不专门修复严重模糊、JPEG 块效应或成团污渍。
+噪声与纸纹、孤立墨点仍可能混淆；复杂彩色纸和密集作品的背景估计也可能不准确。
+处理更平滑或模型置信度更高不代表作者识别更准确，仍需带作者真值的独立验证集评估。
+
+无需训练或联网即可运行降噪回归和可复现对照：
+
+```powershell
+python -B -m unittest tests.unit.test_denoise -v
+python evaluation/evaluate_denoise.py --image image_test/test.png --out denoise_comparison
+# 可选：用已部署权重对各版本做推理，不进行训练、不调用 Agent API
+python evaluation/evaluate_denoise.py --image image_test/test.png --out denoise_model_comparison --recognize
+```
+
+对照脚本固定随机种子（默认 42），生成高斯噪声、脉冲噪声、阴影和低对比度样例，
+保存 `results.json` 和 `comparison.png`，比较原图、旧算法和自适应算法的 MSE、PSNR、诊断和耗时。
+只在这个对照脚本中将参考图长边限制到 1024；生产去噪保持原尺寸。
+PSNR 在像素完全一致时保存为 `null`，对应 MSE 为 0。可选识别结果仅用于观察预测变化，不能当作准确率。
+
 ## Agent 示例
 
 `agent.py` 只有在直接执行时才初始化模型和 Agent：

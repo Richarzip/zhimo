@@ -91,7 +91,28 @@ class APIRegressionTests(unittest.IsolatedAsyncioTestCase):
                     image_bytes(fmt), tta="true", cam="true", rag="false", prompt="原因"))
                 await self.assert_response(response, 200)
                 self.assertEqual(self.mock_single.call_args.kwargs,
-                                 {"use_tta": True, "use_cam": True, "use_rag": False, "prompt": "原因"})
+                                 {"use_tta": True, "use_cam": True, "use_rag": False,
+                                  "use_denoise": True, "prompt": "原因"})
+
+    async def test_denoise_default_and_explicit_switch_reach_single_and_multi(self):
+        for mode in ("single", "multi"):
+            for fields, expected in (({}, True), ({"denoise": "false"}, False), ({"denoise": "true"}, True)):
+                with self.subTest(mode=mode, fields=fields), patch.object(server, "run_multi", return_value={"mode": "multi"}) as multi:
+                    response = await self.client.post("/api/analyze", data=form_for(mode=mode, **fields))
+                    await self.assert_response(response, 200)
+                    selected = self.mock_single if mode == "single" else multi
+                    self.assertEqual(selected.call_args.kwargs["use_denoise"], expected)
+
+    async def test_upload_honors_exif_orientation_even_when_denoise_disabled(self):
+        image = Image.new("RGB", (24, 40), "white")
+        exif = image.getexif()
+        exif[274] = 6
+        payload = io.BytesIO()
+        image.save(payload, format="JPEG", exif=exif)
+        response = await self.client.post("/api/analyze", data=form_for(payload.getvalue(), denoise="false"))
+        await self.assert_response(response, 200)
+        uploaded = self.mock_single.call_args.args[0]
+        self.assertEqual(uploaded.size, (40, 24))
 
     async def test_rejects_fake_image_truncated_image_and_unsupported_format(self):
         for payload in (b"not an image", image_bytes()[:40], image_bytes("TIFF")):

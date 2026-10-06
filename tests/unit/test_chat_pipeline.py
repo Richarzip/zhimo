@@ -2,6 +2,7 @@
 
 import base64
 import json
+from io import BytesIO
 import sys
 import types
 import unittest
@@ -16,6 +17,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from zhimo.application.outputs import classify_exception, finalize_outputs
 from zhimo.application.pipeline import run_chat
+from zhimo.vision.denoise import denoise_image
 # Load PDF dependencies before patch.dict restores sys.modules between tests.
 from zhimo.application import report
 
@@ -125,6 +127,30 @@ class ChatPipelineTests(unittest.TestCase):
         self.assertEqual(result["mode"], "single")
         self.assertEqual(len(result["steps"]), 1)
         self.assertLess(result["message_count"], len(history))
+
+    def test_real_adaptive_output_and_diagnostics_reach_image_chat(self):
+        image = Image.new("RGB", (128, 128), "white")
+        for x in range(12, 110):
+            image.putpixel((x, 30), (0, 0, 0))
+        for x in range(20, 110, 5):
+            for y in range(70, 110, 5):
+                image.putpixel((x, y), (0, 0, 0))
+        self.denoise.side_effect = denoise_image
+        result = self.run_chat(image=image, denoise="true")
+        self.assertEqual(result["denoise"]["mode"], "adaptive")
+        self.assertTrue(result["denoise"]["applied"])
+        payload = self.agent.invoke.call_args.args[0]["messages"][0].content[0]["image_url"]["url"]
+        with Image.open(BytesIO(base64.b64decode(payload.split(",", 1)[1]))) as sent:
+            self.assertEqual(sent.getpixel((20, 70)), (255, 255, 255))
+            self.assertEqual(sent.getpixel((20, 30)), (0, 0, 0))
+        self.assertEqual(image.getpixel((20, 70)), (0, 0, 0))
+        self.assertIn("quality_before", result["denoise"])
+        self.assertIn("quality_after", result["denoise"])
+
+        self.denoise.reset_mock()
+        disabled = self.run_chat(image=image, denoise="false")
+        self.denoise.assert_not_called()
+        self.assertEqual(disabled["denoise"]["method"], "disabled")
 
     def test_compaction_can_remove_current_human_message_without_replaying_old_tools(self):
         old_tool = message("tool", json.dumps({"calligrapher": "旧作者"}), "old-tool", name="old-tool")
