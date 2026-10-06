@@ -6,4 +6,5 @@ API.txt
 __pycache__/
 *.pyc
 chroma_db/
-
+*.sqlite3
+.vscode/
