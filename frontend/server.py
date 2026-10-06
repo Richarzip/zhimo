@@ -4,7 +4,10 @@ import argparse
 import asyncio
 import json
 import os
+import shutil
 import socket
+import subprocess
+import time
 import sys
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -12,6 +15,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl
+from urllib.request import urlopen
 
 from aiohttp import BodyPartReader, web
 from PIL import Image, UnidentifiedImageError
@@ -38,10 +42,19 @@ for import_root in (PROJECT_ROOT, SRC_DIR):
 
 def json_response(data: dict[str, Any], status: int = 200) -> web.Response:
     return web.Response(
-        text=json.dumps(data, ensure_ascii=False),
+        text=json.dumps(data, ensure_ascii=False, default=_json_default),
         status=status,
         content_type="application/json",
     )
+
+
+def _json_default(value: Any) -> Any:
+    """Convert common array-library scalars at the HTTP boundary."""
+    if hasattr(value, "item"):
+        return value.item()
+    if hasattr(value, "tolist"):
+        return value.tolist()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 from zhimo.application.outputs import (
@@ -70,6 +83,91 @@ def finalize_outputs(
         use_examples=use_examples,
         use_pdf=use_pdf,
     )
+
+OLLAMA_DEFAULT_URL = "http://127.0.0.1:11434"
+OLLAMA_DEFAULT_MODEL = "bge-m3"
+
+
+def _ollama_url() -> str:
+    value = os.getenv("OLLAMA_HOST", OLLAMA_DEFAULT_URL).strip()
+    if not value:
+        return OLLAMA_DEFAULT_URL
+    if not value.startswith(("http://", "https://")):
+        value = f"http://{value}"
+    return value.rstrip("/")
+
+
+def _ollama_tags(url: str) -> dict[str, Any] | None:
+    try:
+        with urlopen(f"{url}/api/tags", timeout=2) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _ollama_has_model(payload: dict[str, Any] | None, model: str) -> bool:
+    return any(str(item.get("name", "")).split(":", 1)[0] == model
+               for item in (payload or {}).get("models", []))
+
+
+def _find_ollama() -> str | None:
+    executable = shutil.which("ollama")
+    if executable:
+        return executable
+    candidates = [
+        Path(os.getenv("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama.exe",
+        Path(os.getenv("ProgramFiles", "")) / "Ollama" / "ollama.exe",
+        Path(os.getenv("ProgramW6432", "")) / "Ollama" / "ollama.exe",
+    ]
+    return next((str(path) for path in candidates if path.is_file()), None)
+
+def ensure_ollama_ready() -> dict[str, Any]:
+    """Start Ollama and ensure the embedding model is available for RAG."""
+    if os.getenv("ZHIMO_AUTO_START_OLLAMA", "true").lower() in {"0", "false", "no"}:
+        return {"available": False, "skipped": True, "reason": "disabled"}
+    url = _ollama_url()
+    model = os.getenv("ZHIMO_OLLAMA_MODEL", OLLAMA_DEFAULT_MODEL).strip() or OLLAMA_DEFAULT_MODEL
+    tags = _ollama_tags(url)
+    started = False
+    if tags is None:
+        executable = _find_ollama()
+        if executable is None:
+            print("[RAG] Ollama executable not found; knowledge search will be unavailable.")
+            return {"available": False, "reason": "ollama_not_found", "url": url, "model": model}
+        print("[RAG] Ollama is not running; starting `ollama serve`...")
+        try:
+            subprocess.Popen([executable, "serve"], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            started = True
+        except OSError as exc:
+            print(f"[RAG] Could not start Ollama: {exc}")
+            return {"available": False, "reason": "ollama_start_failed", "url": url, "model": model}
+        deadline = time.monotonic() + float(os.getenv("ZHIMO_OLLAMA_START_TIMEOUT", "20"))
+        while time.monotonic() < deadline:
+            time.sleep(0.5)
+            tags = _ollama_tags(url)
+            if tags is not None:
+                break
+        if tags is None:
+            print("[RAG] Ollama did not become ready; knowledge search will be unavailable.")
+            return {"available": False, "reason": "ollama_not_ready", "url": url, "model": model}
+    if not _ollama_has_model(tags, model):
+        executable = _find_ollama()
+        if executable is None:
+            return {"available": False, "reason": "ollama_not_found", "url": url, "model": model}
+        print(f"[RAG] Ollama is ready, but `{model}` is missing; pulling it now...")
+        try:
+            result = subprocess.run([executable, "pull", model], check=False,
+                                    timeout=float(os.getenv("ZHIMO_OLLAMA_PULL_TIMEOUT", "1800")))
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print(f"[RAG] Could not pull `{model}`: {exc}")
+            return {"available": False, "reason": "model_pull_failed", "url": url, "model": model}
+        if result.returncode != 0:
+            print(f"[RAG] `ollama pull {model}` failed with exit code {result.returncode}.")
+            return {"available": False, "reason": "model_pull_failed", "url": url, "model": model}
+    print(f"[RAG] Ollama ready with `{model}`.")
+    return {"available": True, "started": started, "url": url, "model": model}
 
 def resolve_model_paths() -> list[Path]:
     from zhimo.application import resolve_model_paths as resolve_configured_paths
@@ -489,6 +587,7 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
+    ensure_ollama_ready()
     port = find_port(args.port)
     print(f"Zhimo frontend running at http://{args.host}:{port}")
     print(f"Project root: {PROJECT_ROOT}")

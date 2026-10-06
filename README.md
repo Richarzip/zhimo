@@ -1,521 +1,266 @@
-# 智墨：书法家识别、训练与鉴赏 Agent
+# 智墨：书法家识别与鉴赏 Agent
 
-智墨是一个面向中文书法图像的本地原型项目，覆盖书法家分类模型训练、单字/多字推理、Grad-CAM 可解释性、图像质量评估、书法知识库检索，以及基于 LangChain/LangGraph 的 Agent 编排。项目还包含一个 `aiohttp` 本地网页前端，用于上传图片并查看识别、切分、质量评估、知识检索和诊断结果。
+智墨是一个面向中文书法图像的本地应用，提供书法家识别、多字作品分析、图像质量评估、Grad-CAM、书法知识检索和 Agent 对话。项目包含 `aiohttp` 网页服务，以及可单独调用的 Python 包接口。
 
-## 当前状态与重构约定
+## 当前状态
 
-- 项目根目录就是当前 `zhimo/` 目录。
-- 训练脚本默认读取 `./dataset/`，输出到 `./checkpoints_test_gelu/`。
-- 前端和 Agent 默认使用 ConvNeXt + Swin 双模型软投票集成，权重路径为 `./checkpoints/convnext.pth` 和 `./checkpoints/swin.pth`。
-- 如果使用训练脚本默认产物，需要把对应权重复制/指定给推理端；临时诊断时也可用单模型覆盖。
-- 当前代码面向约 54 个书法家/作者 ID，映射定义在 `train.py` 和 `merge_split_data.py` 的 `CONFIG["author_map"]` 中。
-- 部分源码注释和服务端提示文本存在编码乱码，但主要运行入口、接口和数据流仍可判断。
+- 正式 Python 包位于 `src/zhimo/`。
+- Web 推荐入口是 `apps/web/server.py`。
+- 默认加载 `checkpoints/convnext.pth` 和 `checkpoints/swin.pth`，对两个模型的 softmax 概率取平均。
+- 权重、`.env`、Chroma 数据库和数据集不提交到仓库。
+- 训练代码位于 `training/`，评估代码位于 `evaluation/`，资料审计代码位于 `research/`。
+- 根目录只保留 `agent.py` 一次性 Agent 示例，不再保留旧的兼容脚本。
 
-本次重构采用“新接口优先、旧入口兼容”的方式。新的正式 Python 包位于 `src/zhimo/`；根目录旧文件和 `frontend/server.py` 暂时保留，避免破坏已有脚本、测试和启动方式。基础视觉实现、单模型识别器、集成识别器、知识数据、PDF 报告和 Chroma 适配器已经迁入正式包；根目录同名文件只保留兼容入口。新代码请优先从以下接口导入：
+## 快速开始
 
-```python
-from zhimo.application import get_recognizer, resolve_model_paths
-from zhimo.vision import CalligrapherRecognizer, EnsembleRecognizer
-from zhimo.knowledge import KnowledgeRepository
-from zhimo.agent import create_calligraphy_agent
-from zhimo.application import get_agent
-```
+以下命令均在项目根目录 `zhimo/` 下执行。
 
-从项目根目录运行时，兼容入口会自动加入 `src/`。独立脚本或 IDE 运行配置可以设置：
+### 安装依赖
 
-```powershell
-$env:PYTHONPATH = "$PWD\src;$PWD"
-```
-
-## 功能概览
-
-- 数据整理：合并多个原始数据源，按作者归并、去重、限量采样并划分训练/测试集。
-- 模型训练：基于 `timm` backbone 训练书法家分类器，支持命令行覆盖训练参数和断点恢复。
-- 单字识别：加载 `.pth` 权重，输出书法家、置信度、全部类别概率、backbone 等信息。
-- TTA 推理：支持原图、水平翻转、多尺度等测试时增强后平均概率。
-- Grad-CAM：可生成关注热力图，缺少依赖时不影响普通识别。
-- 多字作品分析：使用传统图像处理切分多字作品，再逐字识别并投票。
-- 图像质量评估：评估泛黄、褪色、噪声、模糊等退化因素。
-- RAG 知识检索：使用 Chroma 持久化向量库和 Ollama `bge-m3` embedding 检索书法知识。
-- Agent 编排：组合识别、质量分析、多字分析、知识检索和回答生成。
-- 本地网页：上传图片，选择单字/多字/对话模式，查看步骤、Top-K、切分框、CAM、JSON 和错误诊断。
-
-## 项目结构
-
-```text
-zhimo/
-|-- README.md                       # 项目说明
-|-- requirements.txt                # Python 依赖
-|-- train.py                        # 书法家分类模型训练脚本
-|-- merge_split_data.py             # 数据合并、去重、采样和 train/test 划分
-|-- calligrapher_recognizer.py      # 单模型兼容入口
-|-- ensemble_recognizer.py          # 集成识别器兼容入口
-|-- calligrapher_tool.py            # Agent 工具兼容入口
-|-- agent.py                        # Agent 示例入口
-|-- agent_builder.py                # Agent 构建兼容入口
-|-- image_preprocess.py             # 图像预处理兼容入口
-|-- image_quality.py                # 图像质量评估兼容入口
-|-- segment.py                      # 多字作品切分兼容入口
-|-- rag_setup.py                    # Chroma 初始化兼容入口
-|-- knowledge.py                    # 书法家知识数据兼容入口
-|-- adverse_aug.py                  # 图像退化/增强脚本
-|-- convert_to_yolo.py              # YOLO 数据格式转换脚本
-|-- evaluate_ensemble.py            # 集成模型评估
-|-- evaluate_result.txt             # 评估结果记录
-|-- test_cam.py                     # Grad-CAM 推理测试脚本
-|-- test_tool.py                    # 工具调用测试脚本
-|-- frontend/
-|   |-- server.py                   # aiohttp 本地服务
-|   |-- static/                     # 前端页面、样式和脚本
-|   `-- tests/                      # 前端与服务端回归测试
-|-- image_test/                     # 示例图片、切分结果和 CAM 输出
-`-- chroma_db/                      # 已持久化的 Chroma 数据库
-```
-
-重构后的职责边界如下：
-
-```text
-src/zhimo/config/        统一配置和权重路径
-src/zhimo/vision/        单模型、集成模型和视觉能力
-src/zhimo/application/   工厂、请求/响应契约、分析管线、结果输出和 Agent 运行时
-src/zhimo/knowledge/     知识数据、Chroma 检索仓储接口
-src/zhimo/agent/         Agent 构建和工具接口
-apps/web/                推荐 Web 启动入口
-training/                训练和数据整理脚本
-evaluation/              评估、手工检查脚本和结果
-research/                资料审计、公开素材工具和审计记录
-```
-
-训练、评估和研究实现已经物理归档到对应目录；根目录同名文件现在只是惰性兼容启动器。旧命令仍可运行，但新代码应直接使用归档目录中的实现。兼容启动器只有在真正执行命令时才加载重依赖。
-
-Web RAG 查询默认使用 `zhimo.agent.tools.search_knowledge`；测试和旧脚本仍可通过注入 `calligrapher_tool.search_knowledge` 兼容旧 mock。
-Web 图像分析默认使用 `zhimo.vision` 中的去噪、反色检测、质量评估和字符切分接口；根目录视觉模块仅保留用于旧脚本和测试注入的兼容边界。
-
-### 公开接口示例
-
-视觉层只负责图片到识别结果，不负责 HTTP、Agent、Chroma 或前端字段：
-
-```python
-from PIL import Image
-from zhimo.vision import EnsembleRecognizer
-
-recognizer = EnsembleRecognizer([
-    "./checkpoints/convnext.pth",
-    "./checkpoints/swin.pth",
-])
-result = recognizer.recognize(Image.open("./image_test/test.png"))
-```
-
-应用层集中决定使用单模型还是集成模型：
-
-```python
-from zhimo.application import get_recognizer, resolve_model_paths
-
-paths = resolve_model_paths()
-recognizer = get_recognizer()
-```
-
-知识库通过仓储接口访问：
-
-```python
-from zhimo.knowledge import KnowledgeRepository
-
-items = KnowledgeRepository().search("王羲之 行书 风格", limit=2)
-```
-
-Agent 通过统一构建入口创建：
-
-```python
-from zhimo.agent import create_calligraphy_agent
-from zhimo.application import get_agent
-
-agent = create_calligraphy_agent()
-```
-
-## 环境准备
-
-建议在独立环境中安装依赖。以下命令都假设当前目录是 `zhimo/`：
-
-```powershell
-python -m pip install -r requirements.txt
-```
-
-如果使用已有 conda 环境，例如 `practice`：
+项目使用 `src` 布局。推荐使用已有的 Conda 环境 `practice`，或创建 Python 3.10+ 环境：
 
 ```powershell
 conda activate practice
 python -m pip install -r requirements.txt
+python -m pip install -e .
 ```
 
-当前依赖文件包含 `torch`、`torchvision`、`timm`、`aiohttp`、`Pillow`、`opencv-python`、`chromadb`、`langchain`、`langgraph`、`langchain-ollama`、`langchain-deepseek` 等核心包。
-
-完整依赖包含训练所需的 `matplotlib`、`seaborn` 和 `scikit-learn`。只运行训练时，也可以安装独立依赖组：
+训练脚本额外需要的绘图库和指标库：
 
 ```powershell
 python -m pip install -e ".[train]"
-python training/train.py --help
 ```
 
-该依赖组包含训练脚本直接使用的 PyTorch、torchvision、timm、NumPy、Pillow、tqdm 和指标/绘图库，不需要启动 Agent、Chroma 或 Ollama。CUDA 用户可先安装与本机驱动匹配的 PyTorch / torchvision，再安装此依赖组。
+### 配置权重
 
-可选依赖说明：
-
-- `predict_with_cam` 需要 `grad-cam` 包。如果缺失，普通识别仍可运行。
-- `dataset_require.py` 使用 Hugging Face `datasets`，但 `requirements.txt` 当前没有显式列出该包。
-- RAG 检索需要本机 Ollama 可用，并已拉取 `bge-m3`。
-
-## 本地网页前端
-
-推荐入口：
-
-```powershell
-python apps/web/server.py
-```
-
-旧入口仍可用：
-
-```powershell
-python apps/web/server.py
-```
-
-默认地址：
+默认集成推理需要：
 
 ```text
-http://127.0.0.1:8765
+checkpoints/
+|-- convnext.pth
+`-- swin.pth
 ```
 
-如果 `8765` 被占用，服务会自动选择一个可用端口，并在终端打印实际地址。也可以手动指定：
+Windows PowerShell 使用分号分隔多个权重路径；Linux/macOS 使用冒号：
+
+```powershell
+$env:ZHIMO_MODEL_PATHS = ".\checkpoints\convnext.pth;.\checkpoints\swin.pth"
+```
+
+临时单模型诊断：
+
+```powershell
+$env:ZHIMO_MODEL_PATH = ".\checkpoints\convnext.pth"
+```
+
+### 启动网页
+
+```powershell
+python apps/web/server.py
+```
+
+默认地址为 `http://127.0.0.1:8765`。指定地址和端口：
 
 ```powershell
 python apps/web/server.py --host 127.0.0.1 --port 8766
 ```
 
-前端服务接口：
+接口：
 
 ```text
-GET  /              # 页面
-GET  /api/health    # 健康检查
-POST /api/analyze   # 图片分析
+GET  /              网页
+GET  /api/health    运行状态、权重和知识库检查
+POST /api/analyze   单字、多字或对话分析
 ```
 
-可通过环境变量指定集成模型权重，多个路径用系统路径分隔符连接。Windows PowerShell 示例：
+上传限制：单张图片最大 `32 MB`，最大 `25,000,000` 像素，支持 JPEG、PNG、WEBP、BMP 和 GIF。
+
+## 项目结构
+
+```text
+zhimo/
+|-- src/zhimo/             正式 Python 包
+|   |-- application/       应用服务、分析流程、输出和 PDF 报告
+|   |-- agent/             Agent 构建和工具
+|   |-- config/            模型、Web 和 Chroma 配置
+|   |-- knowledge/         知识数据、仓储和 Chroma 适配器
+|   `-- vision/            识别器、集成推理、预处理、质量和切分
+|-- apps/web/server.py     推荐 Web 启动入口
+|-- frontend/              网页静态资源和 HTTP 服务实现
+|-- training/              数据整理、训练和格式转换
+|-- evaluation/            集成评估和 Grad-CAM/工具脚本
+|-- research/              资料审计和来源记录
+|-- tests/unit/            应用、Agent、知识审计和视觉单元测试
+|-- frontend/tests/        前端与 HTTP 回归测试
+|-- checkpoints/           本地模型权重，不提交
+|-- chroma_db/             本地 Chroma 数据库
+|-- image_test/            示例图片和调试输出
+|-- agent.py               一次性 Agent 命令行示例
+|-- pyproject.toml         Python 包配置
+`-- requirements.txt       完整运行依赖
+```
+
+## Python 接口
+
+安装项目后可以直接导入；未安装时可临时设置：
 
 ```powershell
-$env:ZHIMO_MODEL_PATHS = "./checkpoints/convnext.pth;./checkpoints/swin.pth"
-python apps/web/server.py
+$env:PYTHONPATH = "$PWD\src;$PWD"
 ```
 
-兼容旧的单模型诊断方式：设置 `ZHIMO_MODEL_PATH` 后，前端会退回单个 `CalligrapherRecognizer`。
-
-上传限制和行为：
-
-- 单张图片最大约 `32 MB`。
-- 最大像素数为 `25,000,000`。
-- 支持 `JPEG`、`PNG`、`WEBP`、`BMP`、`GIF`。
-- 服务端一次只处理一个分析任务；并发上传会返回 busy 诊断。
-- 模型权重缺失、Grad-CAM 依赖缺失、Ollama/RAG 不可用时，会返回结构化诊断，页面不应崩溃。
-
-## 模型权重
-
-前端和 Agent 默认使用 `EnsembleRecognizer`，读取两个权重并做 soft voting：
-
-```text
-./checkpoints/convnext.pth
-./checkpoints/swin.pth
-```
-
-两个模型分别输出 softmax 概率后，对同一类别顺序的概率向量取平均，再选择平均概率最高的书法家。返回结果会包含 `ensemble.strategy`、`ensemble.members` 和 `ensemble.agreement`。
-
-单次训练脚本默认最佳模型输出为：
-
-```text
-./checkpoints_test_gelu/calligrapher_classifier.pth
-```
-
-因此推理前需要准备对应权重：
-
-- 将 ConvNeXt 权重放到 `./checkpoints/convnext.pth`。
-- 将 Swin 权重放到 `./checkpoints/swin.pth`。
-- 或通过 `ZHIMO_MODEL_PATHS` 显式指定两个权重路径。
-
-代码示例：
+应用层会根据配置自动选择单模型或集成模型：
 
 ```python
-from zhimo.vision import EnsembleRecognizer
+from PIL import Image
+from zhimo.application import get_recognizer, resolve_model_paths
 
-recognizer = EnsembleRecognizer(
-    model_paths=["./checkpoints/convnext.pth", "./checkpoints/swin.pth"]
-)
+print(resolve_model_paths())
+recognizer = get_recognizer()
+result = recognizer.recognize(Image.open("image_test/test.png"))
+print(result["calligrapher"], result["confidence"])
 ```
 
-## 数据准备
-
-训练脚本默认数据结构：
-
-```text
-dataset/
-|-- train/
-|   |-- wxz/
-|   |-- yzq/
-|   `-- ...
-`-- test/
-    |-- wxz/
-    |-- yzq/
-    `-- ...
-```
-
-子目录名应使用 `CONFIG["author_map"]` 中定义的作者 ID，例如 `wxz`、`yzq`、`lgq` 等。
-
-合并并划分数据：
-
-```powershell
-python training/merge_split_data.py
-```
-
-`training/merge_split_data.py` 默认从多个源目录读取数据，并输出到：
-
-```text
-dataset/train
-dataset/test
-```
-
-注意：如果目标目录已存在且非空，脚本会提示确认，并在确认后清空目标目录。运行前请确认没有需要保留的数据。
-
-## 模型训练
-
-默认训练配置在 `training/train.py` 的 `CONFIG` 中，关键默认值包括：
-
-```text
-data_root: ./dataset
-output_dir: ./checkpoints_test_gelu
-backbone: convnext_tiny
-epochs: 50
-batch_size: 64
-lr: 8e-5
-weight_decay: 5e-2
-early_stop_patience: 10
-```
-
-运行训练：
-
-```powershell
-python training/train.py
-```
-
-覆盖参数：
-
-```powershell
-python training/train.py --epochs 10 --batch_size 32 --backbone convnext_tiny
-```
-
-`--max_samples` 接受正整数，分别限制训练集和验证集的样本数，省略时使用全部样本。`batch_size` 必须至少为 2，训练集至少需要 2 张图片；只有恰好剩下 1 张的训练尾批会被舍弃，其余尾批及全部验证样本都会保留。
-
-断点恢复：
-
-```powershell
-python training/train.py --resume ./checkpoints_test_gelu/calligrapher_classifier_e10.pth
-```
-
-续训会恢复模型、优化器、学习率调度器，以及新检查点中记录的随机数、早停状态和历史曲线。缺少优化器或调度器的文件不能用于完整续训；旧检查点缺少随机数或历史状态时会给出说明。历史最佳准确率与本轮准确率分别保存，较差的新轮次不会覆盖已有最佳模型。
-
-训练输出包括：
-
-```text
-checkpoints_test_gelu/calligrapher_classifier.pth
-checkpoints_test_gelu/calligrapher_classifier_e*.pth
-checkpoints_test_gelu/loss_accuracy_curve.png
-checkpoints_test_gelu/confusion_matrix.png
-```
-
-根目录的 `train.py` 和 `merge_split_data.py` 只是兼容启动器；实现分别位于 `training/train.py` 和 `training/merge_split_data.py`。
-
-## 推理与鉴赏
-
-### 单张图片识别
+直接使用集成识别器：
 
 ```python
 from PIL import Image
 from zhimo.vision import EnsembleRecognizer
 
-recognizer = EnsembleRecognizer()
-image = Image.open("./image_test/test.png")
-
-result = recognizer.recognize(image, tta=False)
-result_tta = recognizer.recognize(image, tta=True)
+result = EnsembleRecognizer().recognize(
+    Image.open("image_test/test.png"), tta=True
+)
 ```
 
-返回字段包括：
-
-```text
-calligrapher
-confidence
-all_probabilities
-num_classes
-model_backbone
-```
-
-### Grad-CAM
-
-`evaluation/test_cam.py` 默认用于 Grad-CAM 推理测试。根目录 `test_cam.py` 仍是兼容启动器。也可以直接调用：
+Agent 使用统一构建入口：
 
 ```python
-result = recognizer.predict_with_cam(image, tta=True)
+from zhimo.agent import create_calligraphy_agent
+
+agent = create_calligraphy_agent()
 ```
 
-如果运行时报 `No module named 'pytorch_grad_cam'`，安装：
+## Agent 示例
 
-```powershell
-python -m pip install grad-cam
-```
-
-### Agent 示例
+`agent.py` 只有在直接执行时才初始化模型和 Agent：
 
 ```powershell
 python agent.py
+python agent.py image_test/test.png --prompt "请分析这幅字的风格和可能的书法家"
 ```
 
-Agent 工具主要包括：
+主要工具包括 `identify_calligrapher`、`analyze_calligraphy`、`analyze_multi_char` 和 `search_knowledge`。
 
-- `analyze_calligraphy`：单字识别，并附带图像质量报告。
-- `analyze_multi_char`：多字作品切分、逐字识别和投票。
-- `identify_calligrapher`：仅执行书法家识别。
-- `search_knowledge`：检索书法家风格知识。
+Agent 使用的 API 配置放在 `.env` 中，例如：
 
-### 多字切分
-
-`src/zhimo/vision/segmentation_impl.py` 默认读取 `./image_test/image.png`，并保存三种切分方式的可视化结果：
-
-```powershell
-python src/zhimo/vision/segmentation_impl.py
+```env
+DEEPSEEK_API_KEY=your_key_here
 ```
 
-预期输出包括：
-
-```text
-image_test/result_cc.png
-image_test/result_proj.png
-image_test/result_auto.png
-```
+不要把真实密钥提交到 Git。
 
 ## RAG 知识库
 
-仓库中已有持久化的 `chroma_db/`。如果需要初始化、检查或重建向量库：
-
-```powershell
-python -m zhimo.knowledge.chroma
-```
-
-`src/zhimo/knowledge/chroma.py` 使用 `langchain_ollama.OllamaEmbeddings(model="bge-m3")`。运行前需要本机安装并启动 Ollama，且已拉取模型：
+知识库默认保存在 `chroma_db/`，embedding 使用 Ollama 的 `bge-m3`：
 
 ```powershell
 ollama pull bge-m3
+ollama serve
+python -m zhimo.knowledge.chroma
 ```
 
-## 大模型配置
+RAG 不可用时，普通图像识别仍可运行；Web 和 Agent 会返回结构化诊断。
 
-Agent 使用 DeepSeek/LangChain 相关组件。建议通过 `.env` 或系统环境变量配置 API Key，不要把密钥提交到仓库。
+## 训练和评估
 
-示例 `.env`：
+训练数据默认结构：
 
-```env
-DEEPSEEK_API_KEY=你的密钥
+```text
+dataset/
+|-- train/<author>/...
+`-- test/<author>/...
 ```
 
-## 新增功能
+准备数据、训练和断点恢复：
 
-### 传统图像去噪
+```powershell
+python training/merge_split_data.py
+python training/train.py --help
+python training/train.py
+python training/train.py --epochs 10 --batch_size 32 --backbone convnext_tiny
+python training/train.py --resume .\checkpoints_test_gelu\calligrapher_classifier_e10.pth
+```
 
-网页分析默认启用 `zhimo.vision.denoise`。它使用中值滤波去除孤立噪点、双边滤波抑制纹理噪声并保留笔画边缘，再使用保守的 CLAHE 恢复局部对比度。该步骤不使用深度学习模型，用户可以在网页中关闭，并在本轮 Agent 过程里查看是否执行。
+训练输出默认写入 `checkpoints_test_gelu/`。训练不是 Web 运行和普通识别的必要步骤；已有推理权重时可以跳过。
 
-### 书法家作品示例与来源审计
+集成评估：
 
-`research/baidu_knowledge_audit.json` 保存了对知识库 53 个类别的百度百科核对结果。`research/baidu_knowledge_audit.py` 以百度百科公开卡片接口为主源，核对人物条目、年代、身份和百度百科“主要作品/代表作品”字段，并只下载通过规则筛选的作品条目主图：
+```powershell
+python evaluation/evaluate_ensemble.py --data-root .\dataset\test --n 120 --seed 42
+```
+
+结果默认写入项目根目录 `evaluation_result.txt`，也可以通过 `--out` 指定路径。
+
+## 研究资料与来源审计
+
+研究脚本和审计记录位于 `research/`：
 
 ```powershell
 python research/baidu_knowledge_audit.py
+python research/research_assets.py
 ```
 
-百度普通搜索和百度图片接口在自动访问时会触发验证码或 `antiFlag`，因此脚本不会抓取百度图片缩略图，也不会用人物肖像代替书法作品图。图片只保留标题明显属于碑帖、法帖、书法轴卷等书法作品本体的条目；搜索不到或条目不精确匹配的类别会跳过。
-
-核验结果分为“百度人物条目可追溯”和“风格描述、作品归属待人工复核”两层。百科条目存在不等于知识库中的每句风格描述都已被证明；应用优先读取 `baidu_knowledge_audit.json`，不会把没有来源或不符合筛选规则的图片展示为作品示例。旧的 Wikimedia/Commons 审计脚本仍保留在 `research/research_assets.py` 和 `research/collect_wikimedia_assets.ps1`，仅作历史兼容。
-
-### 可选 PDF 可解释性报告
-
-网页左侧可以分别选择传统去噪、显示书法家作品示例和生成 PDF。PDF 由 `zhimo.application.report` 使用 Pillow 生成，包含用户原图、模型输入图、识别结果、置信度/可靠性、双模型集成信息、质量评估、Grad-CAM（若可用）、知识库依据和作品来源。报告通过网页的“Download PDF report”按钮下载，不会自动下载。
-
-人物审计现在同时检查目标时代和书法身份，证据不足或同名冲突时保留旧知识并标记复核。张旭记录的更正依据与旧审计处置见 [人物身份核对说明](research/IDENTITY_AUDIT.md)。
-
-## 评估和研究脚本
-
-集成模型评估实现位于 `evaluation/evaluate_ensemble.py`，通过 `--data-root` 指定按书法家分目录的图片集：
-
-```powershell
-python evaluation/evaluate_ensemble.py --data-root ./dataset/test --n 120 --seed 42
-```
-
-评估默认读取项目目录下的 `dataset/test`。子目录可以是中文书法家名或权重中记录的作者 ID（如 `wxz`），也支持中文名后加 `-楷`、`-行` 等后缀。不存在、空白的数据目录会在加载模型前报错，未识别的类别或两份权重标签顺序不一致也会报错。报告记录实际数据目录；使用训练数据评估时，不能把准确率当作独立测试集结果。
-
-评估结果默认写入项目根目录的 `evaluation_result.txt`；也可以通过 `--out` 指定路径。训练默认输出仍写入项目根目录的 `checkpoints_test_gelu/`。
+当前应用优先使用 `research/baidu_knowledge_audit.json`、`research/knowledge_audit.json` 和 `frontend/static/assets/` 中经过审计的素材。证据不足时会保留为待人工复核，不会直接作为已验证作品展示。
 
 ## 测试
 
-新接口测试：
+全部 Python 单元测试：
 
 ```powershell
 python -B -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-前端测试位于 `frontend/tests/`。在项目根目录运行：
+前端和 HTTP 回归测试：
 
 ```powershell
-node --test frontend/tests/test_app.cjs
 python -B -m unittest discover -s frontend/tests -p "test_*.py" -v
+node --test frontend/tests/test_app.cjs
 ```
 
-测试覆盖重点：
+测试会替换模型和知识库依赖，不需要模型权重、运行中的 Ollama 或真实 API key。真实全流程测试才需要这些外部服务。
 
-- `test_app.cjs`：前端脚本、DOM 交互、上传限制、错误展示和响应处理。
-- `test_recognizer.py`：TTA 概率平均、Grad-CAM 类别对齐、CAM 失败回退等推理逻辑。
-- `test_server.py`：本地 HTTP 接口、上传校验、并发限制、RAG/TTA 参数传递等服务端行为。
+## 主要配置项
 
-这些测试主要验证接口契约和回归行为，不验证真实模型准确率。
+| 变量 | 作用 | 默认值 |
+| --- | --- | --- |
+| `ZHIMO_MODEL_PATHS` | 多模型权重路径 | `checkpoints/convnext.pth` 和 `checkpoints/swin.pth` |
+| `ZHIMO_MODEL_PATH` | 单模型诊断路径 | 未设置 |
+| `ZHIMO_CHROMA_DIR` | Chroma 数据目录 | `chroma_db/` |
+| `ZHIMO_HOST` | Web 默认监听地址 | `127.0.0.1` |
+| `ZHIMO_PORT` | Web 默认端口 | `8765` |
+| `DEEPSEEK_API_KEY` | Agent API key | 未设置 |
 
-## 迁移约定
+## 常见问题
 
-1. Web 路由不直接读取环境变量或构造模型，使用 `zhimo.application`。
-2. Agent 工具不重复实现视觉流程，调用应用服务或视觉接口。
-3. Chroma 访问集中在 `zhimo.knowledge`。
-4. 视觉模块不依赖 `aiohttp`、LangChain 或前端字段。
-5. 新功能先补公共接口和测试，再迁移内部实现。
-6. 根目录旧文件暂时是兼容实现，不是新代码的推荐导入路径。
+### `Import "zhimo..." could not be resolved`
 
-目标调用关系：
+请在 VS Code 中打开 `zhimo/` 作为工作区根目录，并选择安装项目依赖的 Python 解释器。项目使用 `src` 布局，正式包路径是 `src/zhimo/`，导入名仍然是 `zhimo`，不是 `src.zhimo`。也可以临时设置：
 
-```text
-Frontend / CLI / Agent
-          ↓
-    application service
-          ↓
- vision + knowledge + analysis
-          ↓
-    model / Chroma / assets
+```powershell
+$env:PYTHONPATH = "$PWD\src;$PWD"
 ```
 
-## 典型工作流
+### 缺少模型权重
 
-1. 安装依赖。
-2. 准备原始数据目录，运行 `python training/merge_split_data.py` 生成 `dataset/train` 和 `dataset/test`。
-3. 运行 `python training/train.py` 训练书法家分类模型。
-4. 将最佳权重用于推理，或放到 `checkpoints/convnext.pth`。
-5. 启动 Ollama，并确认 `bge-m3` 可用。
-6. 配置大模型 API Key。
-7. 运行 `python -m zhimo.knowledge.chroma` 检查向量知识库。
-8. 运行 `python apps/web/server.py` 使用网页，或运行 `python agent.py`、`python evaluation/test_cam.py` 做脚本测试。
+检查 `/api/health` 返回的 `model_paths` 是否指向实际存在的 `.pth` 文件。双模型模式要求两个权重类别顺序一致。
 
-## 注意事项
+### RAG 或 Agent 不可用
 
-- 建议在 `zhimo/` 目录下运行脚本；很多相对路径都按项目根目录设计。
-- `.gitignore` 已忽略 `.env`、`.venv`、`checkpoints/`、`*.pth`、`API.txt`、`__pycache__/`、`*.pyc`。
-- 当前仓库未包含默认推理权重 `checkpoints/convnext.pth`。
-- `test_tool.py` 默认读取的图片路径可能需要按本机实际文件调整。
-- 识别结论依赖模型权重、图片质量和切分效果。多字作品中如果切分数量过少或投票结果分散，应谨慎解释最终判断。
+确认 Ollama 已启动并拥有 `bge-m3`，再检查 `.env` 中的 API key。RAG/Agent 故障不应影响不使用这些功能的普通识别。
+
+### `predict_with_cam` 缺少依赖
+
+```powershell
+python -m pip install grad-cam
+```
+
+普通识别不依赖 Grad-CAM。

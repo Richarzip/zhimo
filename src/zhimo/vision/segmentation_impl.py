@@ -50,7 +50,7 @@ def segment_by_projection(img_rgb: np.ndarray) -> list:
             aspect = w / h
             if aspect < 0.2 or aspect > 5.0:
                 continue
-            boxes.append((c_start, r_start, w, h))
+            boxes.append((int(c_start), int(r_start), int(w), int(h)))
 
     return boxes
 
@@ -108,7 +108,7 @@ def segment_by_connected_components(img_rgb: np.ndarray) -> list:
         aspect = w / h
         if aspect < 0.15 or aspect > 6.0:
             continue
-        boxes.append((x, y, w, h))
+        boxes.append((int(x), int(y), int(w), int(h)))
 
     return boxes
 

@@ -1,6 +1,8 @@
 """Segmentation coordinates must survive real LangChain ToolMessage encoding."""
 
+import base64
 import importlib.util
+from io import BytesIO
 import json
 from pathlib import Path
 import sys
@@ -33,6 +35,37 @@ class SegmentationJsonTests(unittest.TestCase):
 
 @unittest.skipUnless(importlib.util.find_spec("langchain"), "optional LangChain dependencies not installed")
 class MultiCharacterToolSerializationTests(unittest.TestCase):
+    def test_numpy_coordinates_are_normalized_before_tool_message_serialization(self):
+        from tests.unit.test_agent_models import load_agent_tools, replace_modules
+
+        tools = load_agent_tools()
+        segmentation_module = types.ModuleType("zhimo.vision.segmentation_impl")
+        segmentation_module.segment_auto = Mock(return_value={
+            "boxes": [(np.int64(2), np.int64(3), np.int64(20), np.int64(21))],
+            "method": "numpy-test",
+        })
+        tools.get_recognizer = Mock(return_value=Mock(recognize=Mock(return_value={
+            "calligrapher": "test", "confidence": 0.8,
+        })))
+        image_buffer = BytesIO()
+        Image.new("RGB", (8, 8), "white").save(image_buffer, format="PNG")
+        state = {
+            "messages": [],
+            "analysis_options": {"analysis_mode": "multi", "rag": False},
+        }
+        from langchain_core.messages import HumanMessage
+        from langchain_core.messages import convert_to_messages
+        state["messages"] = convert_to_messages([HumanMessage(content=[
+            {"type": "text", "text": "test"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64," +
+             base64.b64encode(image_buffer.getvalue()).decode("ascii")}},
+        ])])
+        with replace_modules({segmentation_module.__name__: segmentation_module}):
+            result = tools.analyze_multi_char(state)
+        self.assertEqual(result["per_char_results"][0]["bbox"], [2, 3, 20, 21])
+        self.assertTrue(all(type(value) is int for value in result["per_char_results"][0]["bbox"]))
+        json.dumps(result)
+
     def test_real_tool_message_retains_four_characters_in_chat_pipeline(self):
         from typing import Annotated, TypedDict
         from langchain_core.messages import AIMessage, ToolMessage

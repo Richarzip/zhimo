@@ -252,7 +252,10 @@ def analyze_multi_char(state: Annotated[dict, InjectedState]) -> dict:
 
     # 1. 切分
     seg = segment_auto(img_np)
-    boxes = seg["boxes"]
+    # ToolMessage content is serialized before it reaches the chat pipeline.
+    # Normalize coordinates here so custom/OpenCV segmenters cannot leak NumPy
+    # scalar values into the LangChain response.
+    boxes = [tuple(int(value) for value in box) for box in seg.get("boxes", [])]
 
     if not boxes:
         return {
@@ -279,7 +282,7 @@ def analyze_multi_char(state: Annotated[dict, InjectedState]) -> dict:
             per_char_results.append({
                 "name": r["calligrapher"],
                 "confidence": r["confidence"],
-                "bbox": [x, y, w, h],
+                "bbox": [int(x), int(y), int(w), int(h)],
             })
         except Exception as e:
             per_char_results.append({
