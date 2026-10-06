@@ -7,12 +7,42 @@
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div>
-      <p class="eyebrow">Zhimo Local Agent Console</p>
+  <div id="welcome">
+    <div class="welcome-card">
+      <div class="welcome-seal">智<br>墨</div>
+      <p class="welcome-eyebrow">Zhimo Local Agent Console</p>
       <h1>智墨书法识别与鉴赏</h1>
+      <p class="welcome-slogan">以笔墨为媒，让 AI 读懂千年翰墨</p>
+      <p class="welcome-features">多轮对话 · 双模型集成 · 可解释性 · 知识溯源</p>
+      <button class="primary" id="enterBtn" type="button">进入功能界面</button>
+      <p class="welcome-note">本地运行 · 图片仅在本机处理</p>
     </div>
-    <div class="status-pill" id="serverStatus">检查服务中</div>
+  </div>
+  <script>
+    (function () {
+      try {
+        if (localStorage.getItem('zhimoEntered') === '1') {
+          document.getElementById('welcome').classList.add('hidden');
+        }
+      } catch (e) {}
+    })();
+  </script>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-logo">
+        <span>智<br>墨</span>
+      </div>
+      <div>
+        <p class="eyebrow">Zhimo Local Agent Console</p>
+        <h1>智墨书法识别与鉴赏</h1>
+      </div>
+    </div>
+    <div class="head-actions">
+      <button class="secondary" id="resultToggleBtn" type="button">隐藏结果栏</button>
+      <button class="secondary" id="welcomeBtn" type="button" title="重新查看欢迎页">欢迎页</button>
+      <div class="status-pill" id="serverStatus">检查服务中</div>
+    </div>
   </header>
 
   <main class="layout">
@@ -26,7 +56,7 @@
         <input id="imageInput" type="file" accept="image/jpeg,image/png,image/webp,image/bmp,image/gif,.jpg,.jpeg,.png,.webp,.bmp,.gif" aria-labelledby="uploadLabel" aria-describedby="uploadHelp uploadError" />
         <span class="drop-icon" aria-hidden="true">＋</span>
         <strong id="uploadLabel">上传书法图片</strong>
-        <small id="uploadHelp">支持 JPEG、PNG、WEBP、BMP、GIF；单张不超过 32 MiB、2500 万像素；本地服务处理，不上传外网</small>
+        <small id="uploadHelp">支持 JPEG、PNG；单张不超过 32 MiB、2500 万像素</small>
       </label>
       <p id="uploadError" class="upload-error hidden" role="alert"></p>
 
@@ -44,32 +74,29 @@
         <small class="mode-hint">自动判断图片类型，或指定按单字 / 多字作品分析。</small>
       </div>
 
-      <div class="switch-grid">
-        <label class="switch-row">
-          <span>RAG 知识检索</span>
+      <details class="switch-grid">
+        <summary>其他功能</summary>
+        <label class="switch-row" data-tip="检索书法家知识库，补充风格背景与作品信息">
+          <span>知识检索</span>
           <input id="ragToggle" type="checkbox" checked />
         </label>
-        <label class="switch-row">
+        <label class="switch-row" data-tip="可视化模型关注的笔画区域，展示识别依据">
           <span>Grad-CAM 热力图</span>
           <input id="camToggle" type="checkbox" checked />
         </label>
-        <label class="switch-row">
-          <span>TTA 推理增强</span>
+        <label class="switch-row" data-tip="多角度测试增强识别稳定性，结果更可靠">
+          <span>推理增强（TTA）</span>
           <input id="ttaToggle" type="checkbox" />
         </label>
-        <label class="switch-row">
-          <span>Traditional denoising</span>
+        <label class="switch-row" data-tip="去除图片噪声与退化痕迹，提高识别清晰度">
+          <span>传统去噪</span>
           <input id="denoiseToggle" type="checkbox" checked />
         </label>
-        <label class="switch-row">
-          <span>Show calligrapher examples</span>
+        <label class="switch-row" data-tip="展示对应书法家的代表作品参考图">
+          <span> 展示书法家作品示例</span>
           <input id="examplesToggle" type="checkbox" />
         </label>
-        <label class="switch-row">
-          <span>Generate explainable PDF</span>
-          <input id="pdfToggle" type="checkbox" />
-        </label>
-      </div>
+      </details>
 
       <label class="text-field">
         <span>对话内容</span>
@@ -78,17 +105,17 @@
 
       <button class="primary" id="analyzeBtn" disabled>发送</button>
 
-      <div class="env-box" id="envBox">
-        <h3>运行环境</h3>
+      <details class="env-box" id="envBox">
+        <summary>运行环境</summary>
         <dl id="envList"></dl>
-      </div>
+      </details>
     </section>
 
     <section class="panel output-panel">
       <div class="section-title">
         <h2>对话</h2>
         <div class="head-actions">
-          <button class="icon-btn" id="newChatBtn" title="新对话">＋</button>
+          <button class="secondary" id="exportPdfBtn" type="button">导出为PDF</button>
           <span id="runState" class="muted" role="status">等待输入</span>
         </div>
       </div>
@@ -167,6 +194,7 @@
     </section>
   </main>
 
+  <script src="/static/vendor/markdown-it.min.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

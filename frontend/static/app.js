@@ -8,6 +8,7 @@ const state = {
   controller: null,
   analyzing: false,
   validating: false,
+  exportPdf: false,
   sessionId: newSessionId(),
   messages: [], // 对话记录 [{role, text, previewUrl, loading, data}]
 };
@@ -229,7 +230,7 @@ async function analyze() {
     form.append('tta', String($('ttaToggle').checked));
     form.append('denoise', String($('denoiseToggle').checked));
     form.append('examples', String($('examplesToggle').checked));
-    form.append('pdf', String($('pdfToggle').checked));
+    form.append('pdf', String(state.exportPdf));
     form.append('prompt', text);
 
     const res = await fetch('/api/analyze', { method: 'POST', body: form, signal: controller.signal });
@@ -254,6 +255,13 @@ async function analyze() {
     data.summary = data.reply || data.summary;
     completeAiMessage(requestId, { text: data.reply || '', data });
     renderResult(data);
+    // 导出模式：拿到 PDF 后自动触发下载
+    if (state.exportPdf && data.pdf?.data_url) {
+      const link = document.createElement('a');
+      link.href = data.pdf.data_url;
+      link.download = data.pdf.filename || 'zhimo_report.pdf';
+      link.click();
+    }
     $('prompt').value = '';
     const partial = data.knowledge_diagnostic || data.recognition?.evidence?.error || data.steps?.some((step) => step.status === 'error');
     $('runState').textContent = data.blocked ? '已停止在可诊断节点' : partial ? '部分完成' : '完成';
@@ -270,6 +278,9 @@ async function analyze() {
     $('runState').textContent = '失败';
   } finally {
     if (requestId === state.requestId) {
+      state.exportPdf = false;
+      const pdfBtn = $('exportPdfBtn');
+      if (pdfBtn) pdfBtn.textContent = '导出为PDF';
       state.controller = null;
       state.analyzing = false;
       updateAnalyzeButton();
@@ -341,7 +352,7 @@ function renderChat() {
       body = `<div class="chat-content">${renderMarkdown(m.text)}</div>`;
       body += chatCardsHtml(m.data || {});
     }
-    return `<div class="chat-msg ai"><div class="chat-bubble">${body}</div></div>`;
+    return `<div class="chat-msg ai"><div class="chat-avatar ai">智墨</div><div class="chat-bubble">${body}</div></div>`;
   }).join('');
   scrollChat();
 }
@@ -375,72 +386,14 @@ function chatCardsHtml(data) {
   return parts.join('');
 }
 
-// 极简 Markdown 渲染（本地无外部依赖，覆盖标题/列表/引用/代码块/表格/粗体斜体）
-function renderMarkdown(text) {
-  const lines = String(text || '').split('\n');
-  let html = '';
-  let listTag = null; // 'ul' | 'ol' | null
-  const closeList = () => { if (listTag) { html += `</${listTag}>`; listTag = null; } };
-  const openList = (tag) => { if (listTag !== tag) { closeList(); html += `<${tag}>`; listTag = tag; } };
-  let inCode = false;
-  let codeBuf = [];
-  let tableRows = null; // 表格行缓存（escape 后）
-  const flushTable = () => {
-    if (!tableRows || !tableRows.length) return;
-    const rows = tableRows;
-    tableRows = null;
-    const sepRow = rows[0] && rows[0].every((c) => /^:?-+:?$/.test(c));
-    const head = sepRow ? rows[1] : rows[0];
-    const body = sepRow ? rows.slice(2) : rows.slice(1);
-    if (!head || !body.length) return;
-    const thead = `<thead><tr>${head.map((c) => `<th>${inlineMarkup(c)}</th>`).join('')}</tr></thead>`;
-    const tbody = `<tbody>${body.map((r) => `<tr>${r.map((c) => `<td>${inlineMarkup(c)}</td>`).join('')}</tr>`).join('')}</tbody>`;
-    html += `<table>${thead}${tbody}</table>`;
-  };
-  for (const raw of lines) {
-    const trimmed = raw.trim();
-    if (/^```/.test(trimmed)) {
-      if (inCode) {
-        html += `<pre><code>${escapeHtml(codeBuf.join('\n'))}</code></pre>`;
-        codeBuf = [];
-        inCode = false;
-      } else {
-        closeList();
-        inCode = true;
-      }
-      continue;
-    }
-    if (inCode) { codeBuf.push(raw); continue; }
-    const esc = escapeHtml(raw.trim());
-    if (/^\|.*\|$/.test(esc)) {
-      // 表格行：按管道拆单元格（已转义）
-      tableRows = tableRows || [];
-      tableRows.push(esc.split('|').slice(1, -1).map((c) => c.trim()));
-      continue;
-    }
-    let m;
-    if ((m = esc.match(/^####\s+(.*)$/))) { closeList(); flushTable(); html += `<h4>${m[1]}</h4>`; }
-    else if ((m = esc.match(/^###\s+(.*)$/))) { closeList(); flushTable(); html += `<h3>${m[1]}</h3>`; }
-    else if ((m = esc.match(/^##\s+(.*)$/))) { closeList(); flushTable(); html += `<h2>${m[1]}</h2>`; }
-    else if ((m = esc.match(/^#\s+(.*)$/))) { closeList(); flushTable(); html += `<h1>${m[1]}</h1>`; }
-    else if ((m = esc.match(/^&gt;\s?(.*)$/))) { closeList(); flushTable(); html += `<blockquote>${m[1]}</blockquote>`; }
-    else if ((m = esc.match(/^[-*]\s+(.*)$/))) { flushTable(); openList('ul'); html += `<li>${m[1]}</li>`; }
-    else if ((m = esc.match(/^\d+\.\s+(.*)$/))) { flushTable(); openList('ol'); html += `<li>${m[1]}</li>`; }
-    else if (esc === '') { closeList(); flushTable(); }
-    else {
-      closeList(); flushTable();
-      html += `<p>${inlineMarkup(esc)}</p>`;
-    }
-  }
-  closeList();
-  flushTable();
-  if (inCode) html += `<pre><code>${escapeHtml(codeBuf.join('\n'))}</code></pre>`;
-  return html;
-}
+// Markdown 渲染（markdown-it，本地 vendor 库；库未加载时降级为纯文本）
+const zhimoMd = (typeof window !== 'undefined' && window.markdownit)
+  ? window.markdownit({ html: false, linkify: false })
+  : null;
 
-function inlineMarkup(esc) {
-  const bold = esc.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
-  return bold.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+function renderMarkdown(text) {
+  if (zhimoMd) return zhimoMd.render(String(text || ''));
+  return escapeHtml(String(text || ''));
 }
 
 function clearChat() {
@@ -450,7 +403,7 @@ function clearChat() {
   historyUrls.forEach(releasePreviewUrl);
 }
 
-// 新对话：重置会话记忆，保留已上传的图片与选项
+// 重置会话记忆（保留已上传的图片与选项；当前无 UI 入口，供内部逻辑与测试使用）
 function resetChat() {
   state.sessionId = newSessionId();
   state.fileVersion += 1;
@@ -601,7 +554,6 @@ function boot() {
   setupModeButtons();
   $('analyzeBtn').addEventListener('click', analyze);
   $('resetBtn').addEventListener('click', resetAll);
-  $('newChatBtn').addEventListener('click', resetChat);
   $('prompt').addEventListener('input', updateAnalyzeButton);
   renderTimeline([]);
   clearChat();
@@ -609,4 +561,69 @@ function boot() {
 }
 
 boot();
+
+// ===== 结果栏折叠（独立功能，不影响其他逻辑）=====
+// 测试环境（Node）没有 localStorage，统一走安全封装
+function zhimoStorage() {
+  try {
+    return typeof localStorage !== 'undefined' ? localStorage : null;
+  } catch {
+    return null; // 隐私模式等场景访问可能抛异常
+  }
+}
+
+function setupResultToggle() {
+  const btn = $('resultToggleBtn');
+  if (!btn) return;
+  const storage = zhimoStorage();
+  // 刷新后恢复上次的隐藏状态
+  if (storage && storage.getItem('zhimoResultHidden') === '1') {
+    document.body.classList.add('result-hidden');
+    btn.textContent = '显示结果栏';
+  }
+  btn.addEventListener('click', () => {
+    const hidden = document.body.classList.toggle('result-hidden');
+    btn.textContent = hidden ? '显示结果栏' : '隐藏结果栏';
+    if (storage) storage.setItem('zhimoResultHidden', hidden ? '1' : '0');
+  });
+}
+
+setupResultToggle();
+
+// ===== 导出 PDF（独立功能）=====
+function exportPdf() {
+  if (state.analyzing || state.validating) return;
+  if (!state.file) {
+    $('summary').textContent = '请先上传图片，再导出 PDF。';
+    return;
+  }
+  state.exportPdf = true;
+  $('exportPdfBtn').textContent = '导出中...';
+  analyze();
+}
+
+const exportPdfBtn = $('exportPdfBtn');
+if (exportPdfBtn) exportPdfBtn.addEventListener('click', exportPdf);
+
+// ===== 欢迎页进入逻辑 =====
+function enterApp() {
+  const storage = zhimoStorage();
+  if (storage) storage.setItem('zhimoEntered', '1');
+  const welcome = $('welcome');
+  if (welcome) welcome.classList.add('hidden');
+}
+
+const enterBtn = $('enterBtn');
+if (enterBtn) enterBtn.addEventListener('click', enterApp);
+
+// ===== 重新查看欢迎页 =====
+function showWelcome() {
+  const storage = zhimoStorage();
+  if (storage) storage.removeItem('zhimoEntered');
+  const welcome = $('welcome');
+  if (welcome) welcome.classList.remove('hidden');
+}
+
+const welcomeBtn = $('welcomeBtn');
+if (welcomeBtn) welcomeBtn.addEventListener('click', showWelcome);
 
