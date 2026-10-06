@@ -5,4 +5,5 @@ checkpoints/
 API.txt
 __pycache__/
 *.pyc
+chroma_db/
 
