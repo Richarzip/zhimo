@@ -1,6 +1,7 @@
 const state = {
   file: null,
-  mode: 'single',
+  mode: 'auto',
+  camBeforeMulti: null,
   previewUrl: null,
   fileVersion: 0,
   requestId: 0,
@@ -92,6 +93,7 @@ function updateAnalyzeButton() {
 
 function cancelAnalysis() {
   // Aborting fetch alone cannot prevent an already-resolved response from rendering.
+  completeAiMessage(state.requestId, { error: '请求已取消。' });
   state.requestId += 1;
   state.controller?.abort();
   state.controller = null;
@@ -104,8 +106,15 @@ function clearFile() {
   $('imageInput').value = '';
   $('preview').removeAttribute('src');
   $('previewWrap').classList.add('hidden');
-  if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
+  const previousUrl = state.previewUrl;
   state.previewUrl = null;
+  releasePreviewUrl(previousUrl);
+}
+
+function releasePreviewUrl(url) {
+  if (url && url !== state.previewUrl && !state.messages.some((message) => message.previewUrl === url)) {
+    URL.revokeObjectURL(url);
+  }
 }
 
 function showUploadError(message = '') {
@@ -163,7 +172,7 @@ async function setFile(file) {
     $('runState').textContent = '等待输入';
     $('summary').textContent = '请重新选择有效图片。';
   } finally {
-    if (url && url !== state.previewUrl) URL.revokeObjectURL(url);
+    releasePreviewUrl(url);
     if (version === state.fileVersion) {
       state.validating = false;
       updateAnalyzeButton();
@@ -176,9 +185,17 @@ function setupModeButtons() {
     button.addEventListener('click', () => {
       document.querySelectorAll('.segmented button').forEach((b) => b.classList.remove('active'));
       button.classList.add('active');
+      const wasMulti = state.mode === 'multi';
       state.mode = button.dataset.mode;
-      $('camToggle').disabled = state.mode === 'multi';
-      if (state.mode === 'multi') $('camToggle').checked = false;
+      const cam = $('camToggle');
+      cam.disabled = state.mode === 'multi';
+      if (state.mode === 'multi' && !wasMulti) {
+        state.camBeforeMulti = cam.checked;
+        cam.checked = false;
+      } else if (wasMulti && state.mode !== 'multi') {
+        cam.checked = state.camBeforeMulti;
+        state.camBeforeMulti = null;
+      }
     });
   });
 }
@@ -193,15 +210,17 @@ async function analyze() {
   state.analyzing = true;
   updateAnalyzeButton();
   $('runState').textContent = '运行中';
+  clearResult('正在等待回复...');
   renderTimeline([{ name: 'request', status: 'running', detail: '正在发送消息到本地服务' }]);
 
   // 用户消息入对话流 + AI loading 占位
   pushUserMessage(text, state.previewUrl);
-  pushAiMessage({ loading: true });
+  pushAiMessage({ loading: true, requestId });
 
   try {
     const form = new FormData();
     form.append('mode', 'chat');
+    form.append('analysis_mode', state.mode);
     form.append('session_id', state.sessionId);
     form.append('text', text);
     if (state.file) form.append('image', state.file);
@@ -227,21 +246,26 @@ async function analyze() {
     if (!res.ok || data.error) {
       const message = data.message || `请求失败（HTTP ${res.status}）。`;
       renderResult({ ...data, message });
-      pushAiMessage({ text: '', error: message });
+      completeAiMessage(requestId, { error: message });
       $('runState').textContent = '失败';
       return;
     }
     // 对话回复 + 右侧最新结果区（chat 返回无 summary，用 AI 回复代替）
     data.summary = data.reply || data.summary;
-    pushAiMessage({ text: data.reply || '', data });
+    completeAiMessage(requestId, { text: data.reply || '', data });
     renderResult(data);
     $('prompt').value = '';
     const partial = data.knowledge_diagnostic || data.recognition?.evidence?.error || data.steps?.some((step) => step.status === 'error');
     $('runState').textContent = data.blocked ? '已停止在可诊断节点' : partial ? '部分完成' : '完成';
   } catch (err) {
-    if (requestId !== state.requestId || err.name === 'AbortError') return;
+    if (requestId !== state.requestId) return;
+    if (err.name === 'AbortError') {
+      completeAiMessage(requestId, { error: '请求已取消。' });
+      $('runState').textContent = '已取消';
+      return;
+    }
     const data = { error: 'browser_error', diagnostic: { message: '浏览器请求失败', raw: String(err) } };
-    pushAiMessage({ text: '', error: '浏览器请求失败' });
+    completeAiMessage(requestId, { error: '浏览器请求失败' });
     renderResult(data);
     $('runState').textContent = '失败';
   } finally {
@@ -282,8 +306,15 @@ function pushUserMessage(text, previewUrl) {
   renderChat();
 }
 
-function pushAiMessage({ text = '', loading = false, data = null, error = '' } = {}) {
-  state.messages.push({ role: 'ai', text, loading, data, error });
+function pushAiMessage({ text = '', loading = false, data = null, error = '', requestId = null } = {}) {
+  state.messages.push({ role: 'ai', text, loading, data, error, requestId });
+  renderChat();
+}
+
+function completeAiMessage(requestId, { text = '', data = null, error = '' } = {}) {
+  const message = state.messages.find((item) => item.role === 'ai' && item.requestId === requestId && item.loading);
+  if (!message) return;
+  Object.assign(message, { text, data, error, loading: false });
   renderChat();
 }
 
@@ -413,8 +444,10 @@ function inlineMarkup(esc) {
 }
 
 function clearChat() {
+  const historyUrls = new Set(state.messages.map((message) => message.previewUrl).filter(Boolean));
   state.messages = [];
   $('chatList').innerHTML = CHAT_EMPTY_HTML;
+  historyUrls.forEach(releasePreviewUrl);
 }
 
 // 新对话：重置会话记忆，保留已上传的图片与选项
@@ -432,9 +465,10 @@ function resetChat() {
 }
 
 function renderResult(data) {
+  clearResult();
   renderTimeline(data.steps || []);
   $('rawJson').textContent = JSON.stringify(data, null, 2);
-  $('resultMode').textContent = data.mode === 'multi' ? '多字作品' : data.mode === 'single' ? '单字' : '异常';
+  $('resultMode').textContent = data.mode === 'multi' ? '多字作品' : data.mode === 'single' ? '单字' : data.mode === 'chat' ? '对话' : '异常';
   $('summary').textContent = data.summary || data.diagnostic?.message || data.message || '没有返回摘要。';
 
   const diagnostic = data.diagnostic || data.knowledge_diagnostic;
@@ -548,6 +582,7 @@ function renderRanks(rec) {
 }
 
 function resetAll() {
+  state.sessionId = newSessionId();
   state.fileVersion += 1;
   cancelAnalysis();
   clearFile();

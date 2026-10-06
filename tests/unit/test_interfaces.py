@@ -21,7 +21,7 @@ class InterfaceTests(unittest.TestCase):
         self.assertEqual(settings.model_paths[1].name, "swin.pth")
 
     def test_model_paths_can_be_overridden(self):
-        with patch.dict(os.environ, {"ZHIMO_MODEL_PATHS": "a.pth;b.pth"}, clear=True):
+        with patch.dict(os.environ, {"ZHIMO_MODEL_PATHS": os.pathsep.join(("a.pth", "b.pth"))}, clear=True):
             settings = get_settings()
         self.assertEqual([path.name for path in settings.model_paths], ["a.pth", "b.pth"])
 

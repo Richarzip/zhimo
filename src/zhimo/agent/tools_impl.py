@@ -6,34 +6,27 @@ from PIL import Image
 from langchain.tools import tool
 from langgraph.prebuilt import InjectedState
 
-from ..vision.recognizer_impl import CalligrapherRecognizer
-from ..vision.ensemble_impl import EnsembleRecognizer
+from ..application import factory as model_factory
 from ..vision.preprocess_impl import detect_and_fix_inversion
 
 import cv2
 import numpy as np
 from ..vision.quality_impl import assess_image_quality
 from ..knowledge.chroma import build_vectorstore
+from ..config import get_settings
 
-# 单例：整个进程只加载一次模型
+# 复用当前权重配置的模型；配置改变后重新创建，避免沿用旧权重。
 _recognizer = None
-_ensemble_recognizer = None
+_recognizer_paths = None
 
-def get_recognizer() -> CalligrapherRecognizer:
-    global _recognizer
-    if _recognizer is None:
-        _recognizer = CalligrapherRecognizer(
-            model_path="./checkpoints/convnext.pth"
-        )
+
+def get_recognizer():
+    global _recognizer, _recognizer_paths
+    paths = tuple(model_factory.resolve_model_paths())
+    if _recognizer is None or paths != _recognizer_paths:
+        _recognizer = model_factory.get_recognizer()
+        _recognizer_paths = paths
     return _recognizer
-
-
-def get_ensemble_recognizer() -> EnsembleRecognizer:
-    """软投票集成识别器（ConvNeXt + Swin），Agent 默认使用"""
-    global _ensemble_recognizer
-    if _ensemble_recognizer is None:
-        _ensemble_recognizer = EnsembleRecognizer()
-    return _ensemble_recognizer
 
 
 # 辅助函数：从 Agent 状态里提取图片 
@@ -55,6 +48,19 @@ def extract_image_from_state(state: dict) -> Image.Image | None:
     return None
 
 
+def analysis_options(state: dict | None) -> dict:
+    """Read request options injected by the graph, with CLI-compatible defaults."""
+    return (state or {}).get("analysis_options") or {}
+
+
+def _mode_error(state: dict, mode: str) -> dict | None:
+    selected = analysis_options(state).get("analysis_mode", "auto")
+    if selected not in ("auto", mode):
+        tool_name = "analyze_multi_char" if selected == "multi" else "analyze_calligraphy"
+        return {"error": f"本轮选择了 {selected} 模式，请调用 {tool_name}。"}
+    return None
+
+
 # 工具 1：书法家识别 
 @tool
 def identify_calligrapher(state: Annotated[dict, InjectedState]) -> dict:
@@ -62,15 +68,18 @@ def identify_calligrapher(state: Annotated[dict, InjectedState]) -> dict:
 
     这是唯一能判断书法家身份的工具。
     不要根据图片内容自行猜测书法家。
-    内部使用 ConvNeXt + Swin 双模型软投票集成识别。
+    使用配置的识别模型；配置多个权重时进行软投票集成。
 
     返回：
         - calligrapher: 识别到的书法家姓名
         - confidence: 置信度（0-1）
         - top_k: Top-3 候选及置信度
         - all_probabilities: 所有类别概率
-        - ensemble: 双模型集成详情（members 各自判断、agreement 是否一致）
+        - ensemble: 多模型集成详情，单模型时为 None
     """
+    if error := _mode_error(state, "single"):
+        return error
+    options = analysis_options(state)
     image = extract_image_from_state(state)
     if image is None:
         return {"error": "没有找到图片，请上传书法作品"}
@@ -78,8 +87,8 @@ def identify_calligrapher(state: Annotated[dict, InjectedState]) -> dict:
     # 反色预处理（处理拓印）：黑底白字 → 白底黑字
     image, inversion = detect_and_fix_inversion(image)
 
-    recognizer = get_ensemble_recognizer()
-    result = recognizer.recognize(image)
+    recognizer = get_recognizer()
+    result = recognizer.recognize(image, tta=options.get("tta", False))
 
     # 从 all_probabilities 里取 Top-3
     sorted_probs = sorted(
@@ -95,7 +104,7 @@ def identify_calligrapher(state: Annotated[dict, InjectedState]) -> dict:
         "top_k": top_k,
         "all_probabilities": result["all_probabilities"],
         "model_backbone": result["model_backbone"],
-        "ensemble": result["ensemble"],
+        "ensemble": result.get("ensemble"),
         "evidence": result.get("evidence", {}),
         "inversion": inversion,
     }
@@ -115,8 +124,11 @@ def analyze_calligraphy(state: Annotated[dict, InjectedState]) -> dict:
         - top_k: Top-3 候选
         - quality: 图像质量报告（各畸变评分）
         - reliability: 综合可信度评级（high / medium / low）
-        - ensemble: 双模型集成详情（members 各自判断、agreement 是否一致）
+        - ensemble: 多模型集成详情，单模型时为 None
     """
+    if error := _mode_error(state, "single"):
+        return error
+    options = analysis_options(state)
     image = extract_image_from_state(state)
     if image is None:
         return {"error": "没有找到图片"}
@@ -129,9 +141,10 @@ def analyze_calligraphy(state: Annotated[dict, InjectedState]) -> dict:
     img_np = np.array(image.convert("RGB"))
     quality = assess_image_quality(img_np)
 
-    # 集成识别 + Grad-CAM（热力图用与集成结论一致的成员模型解释）
-    recognizer = get_ensemble_recognizer()
-    result = recognizer.predict_with_cam(image)
+    # 开关由本轮状态注入；关闭 CAM 时不创建 GradCAM 或执行反向传播。
+    recognizer = get_recognizer()
+    predict = recognizer.predict_with_cam if options.get("cam", True) else recognizer.recognize
+    result = predict(image, tta=options.get("tta", False))
 
     # 综合可信度
     q = quality["overall"]
@@ -155,7 +168,8 @@ def analyze_calligraphy(state: Annotated[dict, InjectedState]) -> dict:
         "top_k": top_k,
         "quality": quality,
         "reliability": reliability,
-        "ensemble": result["ensemble"],
+        "model_backbone": result["model_backbone"],
+        "ensemble": result.get("ensemble"),
         "evidence": result.get("evidence", {}),
         "inversion": inversion,
     }
@@ -164,16 +178,19 @@ def analyze_calligraphy(state: Annotated[dict, InjectedState]) -> dict:
 
 # 全局向量库实例
 _vectorstore = None
+_vectorstore_path = None
 
 def get_vectorstore():
-    global _vectorstore
-    if _vectorstore is None:
+    global _vectorstore, _vectorstore_path
+    path = get_settings().chroma_dir
+    if _vectorstore is None or path != _vectorstore_path:
         _vectorstore = build_vectorstore()
+        _vectorstore_path = path
     return _vectorstore
 
 # 书法家知识库检索工具
 @tool
-def search_knowledge(query: str) -> str:
+def search_knowledge(query: str, state: Annotated[dict | None, InjectedState] = None) -> str:
     """检索书法家风格知识库。
 
     当你需要解释某位书法家的风格特点、代表作品、
@@ -185,6 +202,8 @@ def search_knowledge(query: str) -> str:
     Returns:
         检索到的知识文本，以【书法家名】标注
     """
+    if not analysis_options(state).get("rag", True):
+        return "本轮已关闭知识库检索；请依据已有图像证据回答，不声称进行了检索。"
     vs = get_vectorstore()
     docs = vs.similarity_search(query, k=2)
 
@@ -220,6 +239,9 @@ def analyze_multi_char(state: Annotated[dict, InjectedState]) -> dict:
     """
     from ..vision.segmentation_impl import segment_auto
     
+    if error := _mode_error(state, "multi"):
+        return error
+    options = analysis_options(state)
     image = extract_image_from_state(state)
     if image is None:
         return {"error": "没有找到图片"}
@@ -238,8 +260,8 @@ def analyze_multi_char(state: Annotated[dict, InjectedState]) -> dict:
             "note": "图像可能不是书法作品，或者切分失败",
         }
 
-    # 2. 逐字识别（软投票集成，每个字 ConvNeXt + Swin 平均概率）
-    recognizer = get_ensemble_recognizer()
+    # 2. 使用配置的模型逐字识别。
+    recognizer = get_recognizer()
     per_char_results = []
 
     for (x, y, w, h) in boxes:
@@ -253,7 +275,7 @@ def analyze_multi_char(state: Annotated[dict, InjectedState]) -> dict:
         char_img = Image.fromarray(img_np[y1:y2, x1:x2])
 
         try:
-            r = recognizer.recognize(char_img)
+            r = recognizer.recognize(char_img, tta=options.get("tta", False))
             per_char_results.append({
                 "name": r["calligrapher"],
                 "confidence": r["confidence"],

@@ -11,15 +11,21 @@ os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 import sys
 import io
 import random
-import argparse
 import numpy as np
 from PIL import Image
 from collections import Counter
 
+if __package__:
+    from .checkpoints import capture_rng_state, restore_best_accuracy, restore_training_state, save_epoch_checkpoint
+    from .support import build_argument_parser, classification_metrics, create_data_loaders, normalized_confusion_matrix, validate_max_samples
+else:
+    from checkpoints import capture_rng_state, restore_best_accuracy, restore_training_state, save_epoch_checkpoint
+    from support import build_argument_parser, classification_metrics, create_data_loaders, normalized_confusion_matrix, validate_max_samples
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 import torchvision.transforms as T
 from tqdm import tqdm
 import timm
@@ -27,7 +33,6 @@ import timm
 # ====================== 可视化导入与配置 ======================
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.metrics import confusion_matrix
 
 # 解决中文显示问题（必须加，否则书法家名字乱码）
 plt.rcParams["font.sans-serif"] = ["SimHei", "WenQuanYi Micro Hei", "DejaVu Sans"]
@@ -120,6 +125,7 @@ VAL_TRANSFORM = T.Compose([
 
 class ArchiveDataset(Dataset):
     def __init__(self, data_root, author_map, author_alias, split="train", transform=None, max_samples=None):
+        validate_max_samples(max_samples)
         self.data_root = data_root
         self.transform = transform
         self.image_paths = []
@@ -158,7 +164,7 @@ class ArchiveDataset(Dataset):
                 self.labels.append(label)
 
         # 限制样本数（用于调试）
-        if max_samples:
+        if max_samples is not None:
             self.image_paths = self.image_paths[:max_samples]
             self.labels = self.labels[:max_samples]
 
@@ -233,6 +239,8 @@ def train_one_epoch(model, loader, criterion, optimizer, device, epoch):
         correct += predicted.eq(labels).sum().item()
         total += labels.size(0)
         pbar.set_postfix({"loss": f"{loss.item():.4f}", "acc": f"{correct / total:.3f}"})
+    if not total:
+        raise ValueError("Training loader yielded no samples")
     return total_loss / total, correct / total
 
 
@@ -252,12 +260,9 @@ def validate(model, loader, criterion, device, id_to_label):
         all_preds.extend(predicted.cpu().tolist())
         all_labels.extend(labels.cpu().tolist())
 
-    from sklearn.metrics import classification_report
-    target_names = [id_to_label[i] for i in sorted(id_to_label.keys())]
-    report = classification_report(
-        all_labels, all_preds, target_names=target_names,
-        digits=4, output_dict=True, zero_division=0
-    )
+    if not total:
+        raise ValueError("Validation loader yielded no samples")
+    report = classification_metrics(all_labels, all_preds, id_to_label)
     return total_loss / total, correct / total, report, all_preds, all_labels
 
 
@@ -293,8 +298,7 @@ def plot_loss_acc_curve(train_losses, val_losses, train_accs, val_accs, save_pat
 
 
 def plot_confusion_matrix(all_labels, all_preds, class_names, save_path):
-    cm = confusion_matrix(all_labels, all_preds)
-    cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+    cm_normalized = normalized_confusion_matrix(all_labels, all_preds, labels=range(len(class_names)))
     
     plt.figure(figsize=(14, 12), dpi=300)
     sns.heatmap(
@@ -326,24 +330,12 @@ def plot_confusion_matrix(all_labels, all_preds, class_names, save_path):
 
 def main():
     # ── 解析命令行参数 ────────────────────────────────────
-    parser = argparse.ArgumentParser(description="Train Calligrapher Classifier")
-    for key, val in CONFIG.items():
-        if key in ["author_map", "author_alias"]:
-            continue
-        if val is None:
-            parser.add_argument(f"--{key}", type=str, default=val)
-        elif isinstance(val, bool):
-            parser.add_argument(f"--{key}", action="store_true", default=val)
-        elif isinstance(val, int):
-            parser.add_argument(f"--{key}", type=int, default=val)
-        elif isinstance(val, float):
-            parser.add_argument(f"--{key}", type=float, default=val)
-        else:
-            parser.add_argument(f"--{key}", type=str, default=val)
-
-    parser.add_argument("--resume", type=str, default=None)
+    parser = build_argument_parser(CONFIG)
     args = parser.parse_args()
     cfg = {**CONFIG, **{k: v for k, v in vars(args).items() if v is not None}}
+
+    if cfg.get("resume") and not os.path.isfile(cfg["resume"]):
+        parser.error(f"Resume checkpoint does not exist: {cfg['resume']}")
 
     # ── 随机种子 ─────────────────────────────────────────
     random.seed(cfg["seed"])
@@ -406,10 +398,10 @@ def main():
     num_classes = len(train_dataset.id_to_label)
     class_names = [train_dataset.id_to_label[i] for i in sorted(train_dataset.id_to_label.keys())]
 
-    train_loader = DataLoader(train_dataset, batch_size=cfg["batch_size"],
-                              shuffle=True, num_workers=4, pin_memory=True)
-    val_loader   = DataLoader(val_dataset, batch_size=cfg["batch_size"],
-                              shuffle=False, num_workers=4, pin_memory=True)
+    try:
+        train_loader, val_loader = create_data_loaders(train_dataset, val_dataset, cfg["batch_size"])
+    except ValueError as exc:
+        parser.error(str(exc))
 
     print(f"\n训练集: {len(train_dataset)} 张 | 验证集: {len(val_dataset)} 张\n")
 
@@ -440,30 +432,42 @@ def main():
 
     best_acc    = 0.0
     start_epoch = 0
+    ckpt_name = "calligrapher_classifier"
 
     # 初始化可视化数据列表
     train_losses, val_losses = [], []
     train_accs, val_accs = [], []
     best_all_preds, best_all_labels = [], []
+    best_val_loss = float("inf")
+    patience_counter = 0
 
-    if cfg.get("resume") and os.path.exists(cfg["resume"]):
+    if cfg.get("resume"):
         ckpt = torch.load(cfg["resume"], map_location=device, weights_only=True)
-        model.load_state_dict(ckpt["model_state_dict"])
+        training_state = restore_training_state(ckpt, model, optimizer, scheduler)
         start_epoch = ckpt.get("epoch", 0) + 1
-        best_acc = ckpt.get("best_acc", 0.0)
-        if "scheduler" in ckpt:
-            scheduler.load_state_dict(ckpt["scheduler"])
+        best_acc = restore_best_accuracy(
+            ckpt, os.path.join(cfg["output_dir"], f"{ckpt_name}.pth"),
+            load=lambda path: torch.load(path, map_location="cpu", weights_only=True),
+        )
+        best_val_loss = training_state.get("best_val_loss", ckpt.get("val_loss", float("inf")))
+        patience_counter = training_state.get("patience_counter", 0)
+        history = training_state.get("history", {})
+        train_losses = list(history.get("train_losses", []))
+        val_losses = list(history.get("val_losses", []))
+        train_accs = list(history.get("train_accs", []))
+        val_accs = list(history.get("val_accs", []))
+        if best_acc == ckpt.get("best_acc", 0.0):
+            best_all_preds = list(training_state.get("best_all_preds", []))
+            best_all_labels = list(training_state.get("best_all_labels", []))
         print(f"从 epoch {start_epoch} 恢复，最佳准确率: {best_acc:.4f}\n")
 
     # ── 训练循环 ─────────────────────────────────────────
     os.makedirs(cfg["output_dir"], exist_ok=True)
-    ckpt_name = f"calligrapher_classifier"
-
-    # 初始化早停变量
-    best_val_loss = float('inf')
-    patience_counter = 0
 
     for epoch in range(start_epoch, cfg["epochs"]):
+        if patience_counter >= cfg["early_stop_patience"]:
+            print("恢复的检查点已达到早停条件；如需继续，请增大 early_stop_patience。")
+            break
         print(f"\n{'='*70}")
         print(f"  Epoch {epoch+1}/{cfg['epochs']}  |  最佳 {best_acc:.4f}\n")
 
@@ -487,37 +491,52 @@ def main():
 
         # 打印每个书法家的指标
         for label_key in sorted(report.keys()):
-            if label_key not in ("accuracy", "macro avg", "weighted avg"):
+            if label_key not in ("accuracy", "micro avg", "macro avg", "weighted avg"):
                 r = report[label_key]
                 print(f"  {label_key}: P={r['precision']:.4f}  R={r['recall']:.4f}  F1={r['f1-score']:.4f}")
+
+        if val_acc > best_acc:
+            best_all_preds = all_preds
+            best_all_labels = all_labels
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0
+        else:
+            patience_counter += 1
 
         ckpt = {
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "optimizer": optimizer.state_dict(),
             "scheduler": scheduler.state_dict(),
-            "best_acc": val_acc,
+            "val_acc": val_acc,
+            "val_loss": val_loss,
+            "rng_state": capture_rng_state(),
+            "training_state": {
+                "best_val_loss": best_val_loss,
+                "patience_counter": patience_counter,
+                "history": {
+                    "train_losses": train_losses, "val_losses": val_losses,
+                    "train_accs": train_accs, "val_accs": val_accs,
+                },
+                "best_all_preds": best_all_preds,
+                "best_all_labels": best_all_labels,
+            },
             "num_classes": num_classes,
             "backbone": cfg["backbone"],
             "id_to_label": train_dataset.id_to_label,
             "label_to_id": train_dataset.label_to_id,
         }
 
-        torch.save(ckpt, os.path.join(cfg["output_dir"], f"{ckpt_name}_e{epoch+1}.pth"))
+        best_acc, improved = save_epoch_checkpoint(
+            ckpt, best_acc, cfg["output_dir"], ckpt_name, save=torch.save,
+        )
 
-        if val_acc > best_acc:
-            best_acc = val_acc
-            torch.save(ckpt, os.path.join(cfg["output_dir"], f"{ckpt_name}.pth"))
+        if improved:
             print(f"  [best] 准确率: {val_acc:.4f}  -> {ckpt_name}.pth")
-            best_all_preds = all_preds
-            best_all_labels = all_labels
 
-        # 早停逻辑（监控验证集 Loss）
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            patience_counter = 0  # 如果 Loss 下降，重置计数器
-        else:
-            patience_counter += 1
+        # 检查点已保存本轮更新后的早停状态。
+        if patience_counter:
             print(f"  [早停监测] 验证集 Loss 未下降，已忍耐 {patience_counter}/{cfg['early_stop_patience']} 个 Epoch")
             
             if patience_counter >= cfg["early_stop_patience"]:
@@ -539,11 +558,15 @@ def main():
     plot_loss_acc_curve(train_losses, val_losses, train_accs, val_accs, loss_acc_path)
     
     cm_path = os.path.join(cfg["output_dir"], "confusion_matrix.png")
-    plot_confusion_matrix(best_all_labels, best_all_preds, class_names, cm_path)
+    if best_all_labels:
+        plot_confusion_matrix(best_all_labels, best_all_preds, class_names, cm_path)
+    else:
+        print("检查点未保留最佳验证预测，本轮也未更新最佳模型，跳过混淆矩阵。")
     
     print("\n可视化完成")
     print(f"   损失准确率曲线: {loss_acc_path}")
-    print(f"   混淆矩阵: {cm_path}")
+    if best_all_labels:
+        print(f"   混淆矩阵: {cm_path}")
     # ==================================================================
 
 

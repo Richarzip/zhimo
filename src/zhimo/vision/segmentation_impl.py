@@ -135,14 +135,36 @@ def segment_auto(img_rgb: np.ndarray) -> dict:
     elif 2 <= len(boxes_proj) <= 30:
         boxes = boxes_proj
         method = "projection"
-    # 都不合理，选数量更接近合理范围的
+    # 2-30 只是优选范围，不能丢弃更长作品的有效切分。
     else:
-        if 2 <= len(boxes_proj) <= 30:
-            boxes = boxes_proj
-            method = "projection(fallback)"
+        candidates = [
+            (boxes_cc, "connected_components"),
+            (boxes_proj, "projection"),
+        ]
+        multi = [item for item in candidates if len(item[0]) >= 2]
+        nonempty = [item for item in candidates if item[0]]
+        if multi:
+            if len(multi) > 1:
+                # 整页投影可能只保留顶部少数行，不能仅因框少就优先采用。
+                # 先保留覆盖墨迹接近最多的候选，再减少笔画碎片。
+                gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
+                _, binary = cv2.threshold(
+                    gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+                )
+                coverage = []
+                for candidate_boxes, _ in multi:
+                    mask = np.zeros(gray.shape, dtype=bool)
+                    for x, y, w, h in candidate_boxes:
+                        mask[y:y + h, x:x + w] = True
+                    coverage.append(np.count_nonzero(binary[mask]))
+                # 允许少量边缘笔画差异，避免为极小的覆盖收益选取更多碎片。
+                minimum_coverage = max(coverage) * 0.9
+                multi = [item for item, score in zip(multi, coverage)
+                         if score >= minimum_coverage]
+            boxes, method = min(multi, key=lambda item: len(item[0]))
         else:
-            boxes = boxes_cc
-            method = "connected_components(fallback)"
+            boxes, method = (nonempty or candidates)[0]
+        method += "(fallback)"
 
     return {
         "boxes": boxes,

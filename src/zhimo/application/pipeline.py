@@ -132,7 +132,7 @@ def parse_tool_result(content: Any) -> dict[str, Any]:
 
 
 def run_chat(
-    image: Image.Image,
+    image: Image.Image | None,
     fields: dict[str, str],
     *,
     get_agent: Callable[[], Any],
@@ -143,26 +143,40 @@ def run_chat(
     """Run one conversational turn while keeping the session contract stable."""
     from langchain.messages import HumanMessage
 
-    original = image.convert("RGB")
+    text = fields.get("text", "").strip() or fields.get("prompt", "").strip()
+    if image is None and not text:
+        raise ValueError("请输入问题或上传图片。")
+
+    original = image.convert("RGB") if image is not None else None
     processed = original
-    if fields.get("denoise", "true") == "true":
+    if processed is not None and fields.get("denoise", "true") == "true":
         processed, denoise_info = denoise(processed)
     else:
-        denoise_info = {"enabled": False, "method": "disabled"}
+        denoise_info = {"enabled": False, "method": "no_image" if image is None else "disabled"}
 
     session_id = fields.get("session_id") or uuid.uuid4().hex
     agent = get_agent()
     config = {"configurable": {"thread_id": session_id}}
     snapshot = agent.get_state(config)
-    before = len((snapshot.values or {}).get("messages", [])) if snapshot else 0
+    previous_messages = (snapshot.values or {}).get("messages", []) if snapshot else []
+    previous_ids = {message.id for message in previous_messages if getattr(message, "id", None)}
     content: list[dict[str, Any]] = []
-    text = (fields.get("text") or fields.get("prompt") or "").strip()
     if text:
         content.append({"type": "text", "text": text})
-    content.append({"type": "image_url", "image_url": {"url": image_to_data_url(processed, "PNG")}})
+    if processed is not None:
+        content.append({"type": "image_url", "image_url": {"url": image_to_data_url(processed, "PNG")}})
+    turn = HumanMessage(content=content, id=uuid.uuid4().hex)
 
     try:
-        result = agent.invoke({"messages": [HumanMessage(content=content)]}, config=config)
+        # Supply a complete set on every turn so checkpointed options cannot leak
+        # from a previous request or a different checkbox selection.
+        options = {
+            "rag": fields.get("rag", "true") == "true",
+            "cam": fields.get("cam", "true") == "true",
+            "tta": fields.get("tta", "false") == "true",
+            "analysis_mode": fields.get("analysis_mode", "auto"),
+        }
+        result = agent.invoke({"messages": [turn], "analysis_options": options}, config=config)
     except Exception as exc:
         return {
             "session_id": session_id,
@@ -173,7 +187,16 @@ def run_chat(
         }
 
     messages = result.get("messages", [])
-    new_messages = messages[before:]
+    # Summarization can remove earlier history (even this turn's HumanMessage).
+    # Message IDs survive checkpoint serialization, unlike list indices.
+    turn_index = next(
+        (index for index, message in enumerate(messages) if getattr(message, "id", None) == turn.id),
+        None,
+    )
+    if turn_index is not None:
+        new_messages = messages[turn_index + 1:]
+    else:
+        new_messages = [message for message in messages if getattr(message, "id", None) not in previous_ids]
     reply = ""
     steps: list[dict[str, Any]] = []
     tool_results: list[dict[str, Any]] = []
@@ -192,11 +215,12 @@ def run_chat(
     recognition: dict[str, Any] = {}
     quality: dict[str, Any] = {}
     reliability = None
-    mode = "single"
+    mode = "chat"
     inversion = None
     for item in tool_results:
         if not isinstance(item, dict) or item.get("error") or "calligrapher" not in item:
             continue
+        mode = "single"
         recognition = {
             "calligrapher": item.get("calligrapher"),
             "confidence": item.get("confidence"),

@@ -5,7 +5,9 @@ from __future__ import annotations
 import ast
 import html
 import json
+import os
 import re
+import tempfile
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -18,6 +20,87 @@ AUDIT_PATH = ROOT / "research" / "baidu_knowledge_audit.json"
 ASSET_DIR = ROOT / "frontend" / "static" / "assets" / "calligraphers"
 ENDPOINT = "https://baike.baidu.com/api/openapi/BaikeLemmaCardApi"
 USER_AGENT = "ZhimoKnowledgeAudit/2.0 (research; Baidu Baike public API)"
+
+# These are target identities, not facts inferred from the current API response.
+# Broad birth windows tolerate disputed dates while separating historical and
+# modern namesakes. Missing evidence always requires review; see IDENTITY_AUDIT.md.
+IDENTITY_GROUPS = (
+    (("钟繇",), ("东汉", "汉末", "三国", "曹魏"), (100, 220)),
+    (("王羲之", "王献之"), ("东晋", "晋朝", "晋代"), (250, 420)),
+    (("智永",), ("南北朝", "陈朝", "隋"), (400, 618)),
+    (("虞世南", "欧阳询", "褚遂良"), ("南北朝", "隋", "唐"), (500, 650)),
+    (("孙过庭", "张旭", "颜真卿", "怀素", "柳公权", "李阳冰", "唐玄宗"), ("唐",), (600, 850)),
+    (("苏轼", "黄庭坚", "米芾", "蔡襄", "宋徽宗"), ("北宋", "宋朝", "宋代"), (900, 1150)),
+    (("宋高宗", "朱熹"), ("南宋", "宋朝", "宋代"), (1050, 1250)),
+    (("赵孟頫", "鲜于枢", "康里巎巎"), ("元", "宋末"), (1150, 1350)),
+    (("沈周", "文徵明", "祝允明", "唐寅", "陈道复", "王宠", "徐渭", "董其昌", "倪元璐", "张瑞图"), ("明",), (1400, 1650)),
+    (("王铎", "傅山", "八大山人"), ("明", "清初"), (1500, 1700)),
+    (("金农", "郑板桥", "刘墉", "伊秉绶", "邓石如", "成亲王"), ("清",), (1600, 1800)),
+    (("赵之谦", "何绍基"), ("清",), (1750, 1900)),
+    (("吴昌硕", "王福庵", "于右任", "弘一", "毛泽东", "鲁迅", "沙孟海", "启功", "林散之"),
+     ("清", "民国", "近代", "现代", "近现代"), (1800, 1930)),
+)
+EXPECTED_IDENTITIES = {
+    name: {"eras": eras, "birth_range": birth_range}
+    for names, eras, birth_range in IDENTITY_GROUPS for name in names
+}
+# Additional independently known identifiers for especially ambiguous names.
+for _name, _identifiers in {
+    "张旭": ("伯高", "张长史"),
+    "王羲之": ("逸少", "王右军"),
+    "颜真卿": ("清臣", "颜鲁公", "颜平原"),
+    "刘墉": ("崇如", "石庵"),
+}.items():
+    EXPECTED_IDENTITIES[_name]["identifiers"] = _identifiers
+
+
+def verify_identity(name: str, title: str, info: dict[str, str], abstract: str) -> dict:
+    """Require independent target-era and calligraphy evidence before publishing."""
+    expected = EXPECTED_IDENTITIES.get(name)
+    reasons = []
+    if title != name:
+        return {"status": "redirect_or_fuzzy", "verified": False,
+                "reasons": ["词条标题与目标姓名不一致，需人工确认别名或消歧结果。"]}
+    if expected is None:
+        return {"status": "needs_manual_review", "verified": False,
+                "reasons": ["目标人物尚无独立身份约束。"]}
+
+    # Do not infer identity from candidate works or the existing knowledge text:
+    # both may contain inherited contamination or references to another person.
+    introduction = re.split(r"人物生平|主要成就|人物经历", abstract, maxsplit=1)[0][:300]
+    profession = " ".join(info.get(key, "") for key in ("职业", "身份"))
+    role_evidence = re.search(r"书法家|书画家|書法家|書畫家", profession + " " + introduction)
+    if not role_evidence:
+        reasons.append("缺少明确的书法家或书画家身份说明。")
+
+    era = info.get("所处时代", "")
+    birth = info.get("出生日期", "")
+    years = [int(value) for value in re.findall(r"(?<!\d)(\d{3,4})(?!\d)", birth)]
+    if not years:
+        # Only the subject's opening date, never dates of admired artists or works.
+        opening = re.match(re.escape(name) + r"\s*[（(]([^）)]*)[）)]", introduction)
+        if opening:
+            year = re.search(r"(?<!\d)(\d{3,4})(?!\d)", opening.group(1))
+            if year:
+                years = [int(year.group(1))]
+    start, end = expected["birth_range"]
+    date_conflict = bool(years and any(not start <= year <= end for year in years))
+    era_conflict = bool(era and not any(token in era for token in expected["eras"]))
+    if date_conflict:
+        reasons.append(f"出生年份 {years} 与目标人物年代范围 {start}–{end} 不符。")
+    if era_conflict:
+        reasons.append(f"词条时代“{era}”与目标人物时代不符。")
+    if not era and not years:
+        reasons.append("缺少可核对的时代或出生年份；不能以师承、作品名中的朝代代替。")
+
+    identifiers = expected.get("identifiers", ())
+    identity_text = " ".join([introduction, *(info.get(key, "") for key in ("字", "别名", "号"))])
+    if identifiers and not any(value in identity_text for value in identifiers):
+        reasons.append("尚未核对目标人物的字、号或通称。")
+    status = "identity_mismatch" if date_conflict or era_conflict else "needs_manual_review" if reasons else "identity_verified"
+    return {"status": status, "verified": status == "identity_verified",
+            "expected_eras": list(expected["eras"]), "expected_birth_range": [start, end],
+            "reasons": reasons}
 
 def clean(value: object) -> str:
     text = html.unescape(str(value or ""))
@@ -123,27 +206,60 @@ def audit_one(item: dict) -> dict:
         return record
     title, info = clean(data.get("title")), fields(data)
     abstract = clean(data.get("abstract"))
-    source_work_text = info.get("\u4e3b\u8981\u4f5c\u54c1") or info.get("\u4ee3\u8868\u4f5c\u54c1") or info.get("\u4f5c\u54c1")
-    work_list = works(source_work_text) if source_work_text else works(item.get("text", ""))
-    record.update({"status": "exact" if title == name else "redirect_or_fuzzy", "baidu_title": title, "url": data.get("url"), "abstract": abstract, "fields": info, "candidate_works": work_list, "images": []})
-    if title == name:
-        for work in work_list[:4]:
-            found = image_for_work(work)
-            if found:
-                record["images"].append(save_image(found, name, len(record["images"]) + 1))
-                if len(record["images"]) >= 2:
-                    break
+    identity = verify_identity(name, title, info, abstract)
+    source_work_text = info.get("主要作品") or info.get("代表作品") or info.get("作品")
+    work_list = works(source_work_text) if source_work_text else []
+    record.update({
+        "status": identity["status"], "identity_check": identity,
+        "baidu_title": title, "url": data.get("url"), "abstract": abstract,
+        "fields": info, "candidate_works": work_list, "images": [],
+        "review_notes": ["姓名相同不等于人物相同；身份和时代须共同匹配。",
+                         "人物身份核对不代表每条生平、作品归属和图片版权已经人工审核。"],
+    })
+    if not identity["verified"]:
+        record["review_notes"].extend(identity["reasons"])
+        return record
+    for work in work_list[:4]:
+        found = image_for_work(work)
+        if found:
+            record["images"].append(save_image(found, name, len(record["images"]) + 1))
+            if len(record["images"]) >= 2:
+                break
     record["verified_text"] = make_text(name, info, abstract, work_list)
-    record["review_notes"] = ["????????????????????", "????????????????", "????????????????????????????"]
     return record
 
 def write_data(records: list[dict]) -> None:
-    lines = ["CALLIGRAPHER_KNOWLEDGE = ["]
+    existing = load_data() if DATA_PATH.exists() else []
+    merged = {item["name"]: dict(item) for item in existing}
     for record in records:
-        text = record.get("verified_text") or f"{record['name']}????????????????"
-        lines.extend(["    {", f"        \"name\": {record['name']!r},", f"        \"text\": {text!r},", "    },"])
+        text = record.get("verified_text")
+        if record.get("status") != "identity_verified" or not isinstance(text, str) or not text.strip():
+            continue
+        identity = verify_identity(
+            record.get("name", ""), record.get("baidu_title", ""),
+            record.get("fields") or {}, record.get("abstract", ""),
+        )
+        if not identity["verified"]:
+            continue
+        merged[record["name"]] = {"name": record["name"], "text": text}
+
+    lines = ["CALLIGRAPHER_KNOWLEDGE = ["]
+    for item in merged.values():
+        lines.extend(["    {", f"        \"name\": {item['name']!r},", f"        \"text\": {item['text']!r},", "    },"])
     lines.append("]")
-    DATA_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=DATA_PATH.parent,
+            prefix=f".{DATA_PATH.name}.", suffix=".tmp", delete=False,
+        ) as output:
+            temporary_path = Path(output.name)
+            output.write("\n".join(lines) + "\n")
+        os.replace(temporary_path, DATA_PATH)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
 
 def main() -> None:
     ASSET_DIR.mkdir(parents=True, exist_ok=True)

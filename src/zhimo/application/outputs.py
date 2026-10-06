@@ -82,8 +82,8 @@ def reference_examples(project_root: Path, name: str, limit: int = 2) -> list[di
 
 def finalize_outputs(
     result: dict[str, Any],
-    original: Image.Image,
-    processed: Image.Image,
+    original: Image.Image | None,
+    processed: Image.Image | None,
     *,
     project_root: Path,
     use_examples: bool,

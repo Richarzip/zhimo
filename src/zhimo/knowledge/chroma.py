@@ -1,6 +1,7 @@
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
 from .data import CALLIGRAPHER_KNOWLEDGE
+from ..config import get_settings
 
 
 # 本地 embedding 模型（完全离线，不需要 API Key）
@@ -8,15 +9,12 @@ from .data import CALLIGRAPHER_KNOWLEDGE
 def _embeddings():
     return OllamaEmbeddings(model="bge-m3")
 
-# 向量库持久化目录
-PERSIST_DIR = "./chroma_db"
-
 def build_vectorstore():
     """构建/加载向量库"""
     return Chroma(
         collection_name="calligrapher_knowledge",
         embedding_function=_embeddings(),
-        persist_directory=PERSIST_DIR,
+        persist_directory=str(get_settings().chroma_dir),
     )
 
 

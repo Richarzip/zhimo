@@ -49,9 +49,12 @@ class Settings:
 
 def get_settings() -> Settings:
     paths = _paths_from_env()
+    chroma_dir = Path(os.getenv("ZHIMO_CHROMA_DIR") or Settings.chroma_dir).expanduser()
+    if not chroma_dir.is_absolute():
+        chroma_dir = PROJECT_ROOT / chroma_dir
     return Settings(
         model_paths=paths or Settings.model_paths,
-        chroma_dir=Path(os.getenv("ZHIMO_CHROMA_DIR", str(Settings.chroma_dir))),
+        chroma_dir=chroma_dir.resolve(),
         web_host=os.getenv("ZHIMO_HOST", Settings.web_host),
         web_port=int(os.getenv("ZHIMO_PORT", str(Settings.web_port))),
     )

@@ -43,8 +43,16 @@ function fixture({deferImages = false, healthStatus = 200} = {}) {
       if (!deferImages) queueMicrotask(() => file.corrupt ? this.fail() : this.succeed());
     }
   }
+  const modes = Object.fromEntries(['auto', 'single', 'multi'].map((mode) => {
+    const listeners = new Map();
+    return [mode, {
+      dataset: {mode}, listeners,
+      classList: {add() {}, remove() {}},
+      addEventListener(name, callback) { listeners.set(name, callback); },
+    }];
+  }));
   const context = vm.createContext({
-    document: { getElementById: el, querySelectorAll: () => [] },
+    document: { getElementById: el, querySelectorAll: () => Object.values(modes) },
     URL: {
       createObjectURL(file) { const url = `blob:${++nextUrl}:${file.name}`; urls.set(url, file); return url; },
       revokeObjectURL(url) { revoked.push(url); },
@@ -57,8 +65,8 @@ function fixture({deferImages = false, healthStatus = 200} = {}) {
       return new Promise((resolve, reject) => pending.push({options, resolve, reject}));
     },
   });
-  vm.runInContext(source + '\nthis.api = {setFile, analyze, resetAll, renderQuality};', context);
-  return {api: context.api, el, pending, images, revoked};
+  vm.runInContext(source + '\nthis.api = {setFile, analyze, resetAll, resetChat, renderQuality};', context);
+  return {api: context.api, el, pending, images, revoked, modes};
 }
 const file = (name = 'image.png', extra = {}) => ({name, type: 'image/png', size: 1024, ...extra});
 const success = (author = '王羲之') => ({mode: 'single', recognition: {calligrapher: author, confidence: 0.8}, quality: {overall: 0}});
@@ -243,7 +251,7 @@ test('boundary-size images and missing MIME with a supported extension are accep
   assert.equal(f.el('uploadError').textContent, '');
 });
 
-test('switching files clears old results and releases old preview URLs', async () => {
+test('switching files clears results and keeps history image URLs until reset', async () => {
   const f = fixture();
   await f.api.setFile(file('A.png'));
   const oldUrl = f.el('preview').src;
@@ -254,9 +262,10 @@ test('switching files clears old results and releases old preview URLs', async (
   const newUrl = f.el('preview').src;
   assert.equal(f.el('calligrapher').textContent, '-');
   assert.equal(f.el('resultMode').textContent, '未运行');
-  assert.deepEqual(f.revoked, [oldUrl]);
+  assert.deepEqual(f.revoked, []);
   f.api.resetAll();
-  assert.deepEqual(f.revoked, [oldUrl, newUrl]);
+  assert.deepEqual(new Set(f.revoked), new Set([oldUrl, newUrl]));
+  assert.equal(f.revoked.length, 2);
 });
 
 test('out-of-order image validation cannot replace a newer file', async () => {
@@ -290,4 +299,170 @@ test('health HTTP failure never appears ready', async () => {
   const f = fixture({healthStatus: 500});
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(f.el('serverStatus').textContent, '服务异常');
+});
+
+
+test('each completed or failed request replaces its loading bubble', async (t) => {
+  for (const outcome of ['success', 'business-error', 'network-error', 'abort']) {
+    await t.test(outcome, async () => {
+      const f = fixture();
+      f.el('prompt').value = '介绍王羲之';
+      const request = f.api.analyze();
+      assert.equal((f.el('chatList').innerHTML.match(/chat-loading/g) || []).length, 1);
+      if (outcome === 'success') respond(f.pending[0], {mode: 'chat', reply: '本轮回答'});
+      else if (outcome === 'business-error') respond(f.pending[0], {error: 'test', message: '服务失败'}, 500);
+      else if (outcome === 'network-error') f.pending[0].reject(new Error('offline'));
+      else f.pending[0].reject(Object.assign(new Error('aborted'), {name: 'AbortError'}));
+      await request;
+      const chat = f.el('chatList').innerHTML;
+      assert.doesNotMatch(chat, /chat-loading/);
+      assert.equal((chat.match(/chat-msg ai/g) || []).length, 1);
+      assert.match(chat, outcome === 'success' ? /本轮回答/ : /失败|取消/);
+      assert.equal(f.el('analyzeBtn').disabled, outcome === 'success');
+    });
+  }
+});
+
+test('changing files finishes the cancelled bubble without affecting a newer reply', async () => {
+  const f = fixture();
+  await f.api.setFile(file('A.png'));
+  const first = f.api.analyze();
+  await f.api.setFile(file('B.png'));
+  assert.doesNotMatch(f.el('chatList').innerHTML, /chat-loading/);
+  assert.match(f.el('chatList').innerHTML, /取消/);
+  const second = f.api.analyze();
+  respond(f.pending[0], {mode: 'chat', reply: '过期回答'});
+  await first;
+  assert.equal((f.el('chatList').innerHTML.match(/chat-loading/g) || []).length, 1);
+  assert.doesNotMatch(f.el('chatList').innerHTML, /过期回答/);
+  respond(f.pending[1], {mode: 'chat', reply: '最新回答'});
+  await second;
+  assert.doesNotMatch(f.el('chatList').innerHTML, /chat-loading/);
+  assert.match(f.el('chatList').innerHTML, /最新回答/);
+  assert.equal((f.el('chatList').innerHTML.match(/chat-msg ai/g) || []).length, 2);
+});
+
+test('a later turn clears absent evidence, diagnostics, references and PDF actions', async (t) => {
+  for (const secondResponse of [{mode: 'chat', reply: '普通回答'}, {error: 'test', message: '本轮失败'}]) {
+    await t.test(secondResponse.error ? 'failure' : 'success', async () => {
+      const f = fixture();
+      await f.api.setFile(file());
+      const first = f.api.analyze();
+      respond(f.pending[0], {
+        ...success(), reply: '首次回答',
+        recognition: {calligrapher: '王羲之', evidence: {heatmap: 'data:image/png;base64,old'}},
+        segmentation: {overlay: 'data:image/png;base64,boxes'},
+        diagnostic: {message: '旧诊断'},
+        reference_examples: [{url: '/old.jpg', title: '旧资料'}],
+        reference_examples_note: '旧备注',
+        pdf: {data_url: 'data:application/pdf;base64,old', filename: 'old.pdf'},
+      });
+      await first;
+      for (const id of ['camFigure', 'segFigure', 'diagnostic', 'referenceBox', 'reportActions']) {
+        assert.equal(f.el(id).classList.contains('hidden'), false);
+      }
+      assert.equal(typeof f.el('downloadPdfBtn').onclick, 'function');
+      f.el('prompt').value = '再问一次';
+      const second = f.api.analyze();
+      respond(f.pending[1], secondResponse, secondResponse.error ? 500 : 200);
+      await second;
+      for (const id of ['camFigure', 'segFigure', 'diagnostic', 'referenceBox', 'reportActions']) {
+        assert.equal(f.el(id).classList.contains('hidden'), true);
+      }
+      for (const id of ['camImage', 'segImage']) assert.equal(f.el(id).src, '');
+      assert.equal(f.el('diagnostic').innerHTML, '');
+      assert.equal(f.el('referenceGrid').innerHTML, '');
+      assert.equal(f.el('referenceNote').textContent, '');
+      assert.equal(f.el('downloadPdfBtn').onclick, null);
+    });
+  }
+});
+
+test('history retains image URLs across rerenders and a new chat releases only unused images', async () => {
+  const f = fixture();
+  await f.api.setFile(file('A.png'));
+  const firstUrl = f.el('preview').src;
+  for (let turn = 0; turn < 2; turn++) {
+    const request = f.api.analyze();
+    respond(f.pending[turn], {mode: 'chat', reply: '回答'});
+    await request;
+  }
+  await f.api.setFile(file('B.png'));
+  const currentUrl = f.el('preview').src;
+  const next = f.api.analyze();
+  respond(f.pending[2], {mode: 'chat', reply: '新图片回答'});
+  await next;
+  assert.deepEqual(f.revoked, []);
+  assert.equal(f.el('chatList').innerHTML.split(firstUrl).length - 1, 2);
+  f.api.resetChat();
+  assert.deepEqual(f.revoked, [firstUrl]);
+  assert.equal(f.el('preview').src, currentUrl);
+  assert.doesNotMatch(f.el('chatList').innerHTML, /chat-img/);
+  f.api.resetAll();
+  assert.deepEqual(f.revoked, [firstUrl, currentUrl]);
+  f.api.resetAll();
+  assert.equal(f.revoked.length, 2);
+});
+
+test('unused image previews are released immediately when replaced', async () => {
+  const f = fixture();
+  await f.api.setFile(file('A.png'));
+  const firstUrl = f.el('preview').src;
+  await f.api.setFile(file('B.png'));
+  assert.deepEqual(f.revoked, [firstUrl]);
+});
+
+test('reset starts a new server session and an old response cannot restore cleared history', async () => {
+  const f = fixture();
+  await f.api.setFile(file());
+  f.el('prompt').value = '旧会话';
+  const first = f.api.analyze();
+  const oldSession = f.pending[0].options.body.entries.get('session_id');
+  f.api.resetAll();
+  assert.equal(f.pending[0].options.signal.aborted, true);
+  assert.doesNotMatch(f.el('chatList').innerHTML, /旧会话|chat-loading/);
+  f.el('prompt').value = '新会话';
+  const second = f.api.analyze();
+  assert.notEqual(f.pending[1].options.body.entries.get('session_id'), oldSession);
+  respond(f.pending[1], {mode: 'chat', reply: '新回答'});
+  await second;
+  respond(f.pending[0], {mode: 'chat', reply: '旧回答'});
+  await first;
+  assert.match(f.el('chatList').innerHTML, /新会话|新回答/);
+  assert.doesNotMatch(f.el('chatList').innerHTML, /旧会话|旧回答|chat-loading/);
+  assert.equal(f.el('summary').textContent, '新回答');
+});
+
+test('analysis mode selection is sent while preserving conversational requests', async () => {
+  const f = fixture();
+  await f.api.setFile(file());
+  for (const [index, mode] of ['auto', 'multi', 'single'].entries()) {
+    if (mode !== 'auto') f.modes[mode].listeners.get('click')();
+    const request = f.api.analyze();
+    const fields = f.pending[index].options.body.entries;
+    assert.equal(fields.get('mode'), 'chat');
+    assert.equal(fields.get('analysis_mode'), mode);
+    assert.equal(f.el('camToggle').disabled, mode === 'multi');
+    assert.equal(fields.get('cam'), mode === 'multi' ? 'false' : 'true');
+    respond(f.pending[index], {mode: 'chat', reply: '回答'});
+    await request;
+  }
+  assert.match(html, /class="active" data-mode="auto"/);
+});
+
+
+test('leaving multi-character mode restores the previous CAM preference', async (t) => {
+  for (const checked of [false, true]) {
+    await t.test(String(checked), () => {
+      const f = fixture();
+      f.el('camToggle').checked = checked;
+      f.modes.multi.listeners.get('click')();
+      f.modes.multi.listeners.get('click')();
+      assert.equal(f.el('camToggle').disabled, true);
+      assert.equal(f.el('camToggle').checked, false);
+      f.modes.auto.listeners.get('click')();
+      assert.equal(f.el('camToggle').disabled, false);
+      assert.equal(f.el('camToggle').checked, checked);
+    });
+  }
 });

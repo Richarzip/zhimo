@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl
 
 from aiohttp import BodyPartReader, web
 from PIL import Image, UnidentifiedImageError
@@ -27,7 +28,7 @@ MAX_IMAGE_PIXELS = 25_000_000
 ALLOWED_IMAGE_FORMATS = frozenset({"JPEG", "PNG", "WEBP", "BMP", "GIF"})
 UPLOAD_FIELDS = frozenset({
     "mode", "tta", "cam", "rag", "denoise", "examples", "pdf",
-    "prompt", "session_id", "text",
+    "prompt", "session_id", "text", "analysis_mode",
 })
 
 for import_root in (PROJECT_ROOT, SRC_DIR):
@@ -55,8 +56,8 @@ def classify_exception(exc: BaseException) -> dict[str, Any]:
 
 def finalize_outputs(
     result: dict[str, Any],
-    original: Image.Image,
-    processed: Image.Image,
+    original: Image.Image | None,
+    processed: Image.Image | None,
     *,
     use_examples: bool,
     use_pdf: bool,
@@ -122,7 +123,7 @@ def get_quality_assessor():
 def get_segmenter():
     return _legacy_or_formal("segment", "segment_auto", "zhimo.vision.segmentation")
 
-def run_chat(image: Image.Image, fields: dict[str, str]) -> dict[str, Any]:
+def run_chat(image: Image.Image | None, fields: dict[str, str]) -> dict[str, Any]:
     """Compatibility adapter for the application chat pipeline."""
     denoise_image = get_denoiser()
     from zhimo.application.pipeline import run_chat as pipeline_run_chat
@@ -244,48 +245,79 @@ class UploadError(Exception):
         self.error = error
 
 
-async def read_upload(request: web.Request) -> tuple[bytes, dict[str, str]]:
+async def read_upload(request: web.Request) -> tuple[bytes | None, dict[str, str]]:
     if request.content_length is not None and request.content_length > MAX_REQUEST_BYTES:
         raise UploadError("上传请求过大，图片不能超过 32 MiB。", status=413, error="upload_too_large")
-    if request.content_type != "multipart/form-data":
-        raise UploadError("请使用图片上传表单。", error="invalid_request")
+    if request.content_type not in {"multipart/form-data", "application/x-www-form-urlencoded"}:
+        raise UploadError("请使用图片或文字表单。", error="invalid_request")
 
     fields: dict[str, str] = {}
     image_bytes: bytes | None = None
     seen: set[str] = set()
+
+    def check_field(name: str | None, *, allow_image: bool) -> None:
+        if name is None or (name not in UPLOAD_FIELDS and not (allow_image and name == "image")):
+            raise UploadError("上传表单包含未知字段。", error="invalid_request")
+        if name in seen:
+            raise UploadError("上传表单包含重复字段。", error="invalid_request")
+        seen.add(name)
+
     try:
-        reader = await request.multipart()
-        async for part in reader:
-            if not isinstance(part, BodyPartReader):
-                raise UploadError("不支持嵌套上传表单。", error="invalid_request")
-            name = part.name
-            if name not in UPLOAD_FIELDS and name != "image":
-                raise UploadError("上传表单包含未知字段。", error="invalid_request")
-            if name in seen:
-                raise UploadError("上传表单包含重复字段。", error="invalid_request")
-            seen.add(name)
-            limit = MAX_IMAGE_BYTES if name == "image" else MAX_FIELD_BYTES
-            value = bytearray()
-            while chunk := await part.read_chunk():
-                if len(value) + len(chunk) > limit or request.content.total_bytes > MAX_REQUEST_BYTES:
-                    message = "图片不能超过 32 MiB。" if name == "image" else "上传表单字段过长。"
-                    raise UploadError(message, status=413, error="upload_too_large")
-                value.extend(chunk)
-            if name == "image":
-                image_bytes = bytes(value)
-            else:
-                fields[name] = value.decode("utf-8").strip()
+        if request.content_type == "application/x-www-form-urlencoded":
+            body = bytearray()
+            async for chunk in request.content.iter_chunked(8192):
+                if len(body) + len(chunk) > MAX_REQUEST_BYTES or request.content.total_bytes > MAX_REQUEST_BYTES:
+                    raise UploadError("上传请求过大。", status=413, error="upload_too_large")
+                body.extend(chunk)
+            pairs = parse_qsl(
+                body.decode("utf-8"), keep_blank_values=True, strict_parsing=True,
+                encoding="utf-8", errors="strict", max_num_fields=len(UPLOAD_FIELDS),
+            )
+            for name, value in pairs:
+                check_field(name, allow_image=False)
+                if len(value.encode("utf-8")) > MAX_FIELD_BYTES:
+                    raise UploadError("上传表单字段过长。", status=413, error="upload_too_large")
+                fields[name] = value.strip()
+        else:
+            reader = await request.multipart()
+            async for part in reader:
+                if not isinstance(part, BodyPartReader):
+                    raise UploadError("不支持嵌套上传表单。", error="invalid_request")
+                name = part.name
+                check_field(name, allow_image=True)
+                limit = MAX_IMAGE_BYTES if name == "image" else MAX_FIELD_BYTES
+                value = bytearray()
+                while chunk := await part.read_chunk():
+                    if len(value) + len(chunk) > limit or request.content.total_bytes > MAX_REQUEST_BYTES:
+                        message = "图片不能超过 32 MiB。" if name == "image" else "上传表单字段过长。"
+                        raise UploadError(message, status=413, error="upload_too_large")
+                    value.extend(chunk)
+                if name == "image":
+                    image_bytes = bytes(value)
+                else:
+                    fields[name] = value.decode("utf-8").strip()
         if request.content.total_bytes > MAX_REQUEST_BYTES:
             raise UploadError("上传请求过大。", status=413, error="upload_too_large")
     except (AssertionError, ValueError, UnicodeError) as exc:
-        raise UploadError("上传表单无效，请重新选择图片。", error="invalid_request") from exc
+        raise UploadError("上传表单无效，请重新提交。", error="invalid_request") from exc
 
-    if not image_bytes:
-        raise UploadError("请上传图片。", error="missing_image")
-    if fields.get("mode", "single") not in {"single", "multi", "chat"}:
+    if fields.get("analysis_mode", "auto") not in {"auto", "single", "multi"}:
+        raise UploadError("分析模式必须为 auto、single 或 multi。", error="invalid_request")
+    mode = fields.get("mode", "single")
+    if mode not in {"single", "multi", "chat"}:
         raise UploadError("分析模式无效。", error="invalid_request")
-    if any(fields.get(name, "false") not in {"true", "false"} for name in ("tta", "cam", "rag")):
+    if any(
+        fields.get(name, "false") not in {"true", "false"}
+        for name in ("tta", "cam", "rag", "denoise", "examples", "pdf")
+    ):
         raise UploadError("分析选项无效。", error="invalid_request")
+    if image_bytes == b"":
+        raise UploadError("图片文件为空，请选择有效图片。")
+    if image_bytes is None:
+        if mode != "chat":
+            raise UploadError("请上传图片。", error="missing_image")
+        if not (fields.get("text") or fields.get("prompt")):
+            raise UploadError("请输入问题或上传图片。", error="missing_input")
     return image_bytes, fields
 
 
@@ -310,8 +342,12 @@ def decode_image(image_bytes: bytes) -> Image.Image:
         raise UploadError("图片无法解码，文件可能已损坏或不是支持的图片。") from exc
 
 
-def analyze_image(image_bytes: bytes, fields: dict[str, str]) -> dict[str, Any]:
+def analyze_image(image_bytes: bytes | None, fields: dict[str, str]) -> dict[str, Any]:
     # Image decoding, model inference and knowledge lookup all run in the worker.
+    if image_bytes is None:
+        if fields.get("mode", "single") != "chat":
+            raise UploadError("请上传图片。", error="missing_image")
+        return run_chat(None, fields)
     with decode_image(image_bytes) as image:
         mode = fields.get("mode", "single")
         use_tta = fields.get("tta", "false") == "true"
@@ -380,7 +416,7 @@ class AnalysisWorker:
     def release(self) -> None:
         self.busy = False
 
-    def submit(self, image_bytes: bytes, fields: dict[str, str]) -> asyncio.Future:
+    def submit(self, image_bytes: bytes | None, fields: dict[str, str]) -> asyncio.Future:
         loop = asyncio.get_running_loop()
         job = self.executor.submit(analyze_image, image_bytes, fields)
         # Only the actual thread completion frees the slot, even if the HTTP

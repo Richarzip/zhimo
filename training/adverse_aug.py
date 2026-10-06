@@ -45,20 +45,16 @@ def yuv_to_rgb_np(img_yuv):
 
 
 def aug_yellowing(img_rgb: np.ndarray, severity: float) -> np.ndarray:
-    """
-    宣纸泛黄（加强版）：增加 U 分量、减少 V 分量，并降低亮度
-    参数调整：
-        - add_u: 35 -> 50
-        - sub_v: 22 -> 30
-        - 亮度衰减: (1 - 0.1) -> (1 - 0.15)
-    """
+    """宣纸泛黄：降低蓝色色度 U、增加红色色度 V，并轻微降低亮度。"""
+    if severity <= 0:
+        return img_rgb.copy()
     yuv = rgb_to_yuv_np(img_rgb)
-    add_u = int(50 * severity)
-    sub_v = int(30 * severity)
-    # 亮度微降，模拟老化
+    sub_u = int(50 * severity)
+    add_v = int(30 * severity)
+    # 亮度微降，模拟老化；U/V 的方向与 BT.601 逆变换一致。
     yuv[..., 0] = np.clip(yuv[..., 0] * (1 - 0.15 * severity), 0, 255)
-    yuv[..., 1] = np.clip(yuv[..., 1] + add_u, 0, 255)
-    yuv[..., 2] = np.clip(yuv[..., 2] - sub_v, 0, 255)
+    yuv[..., 1] = np.clip(yuv[..., 1] - sub_u, 0, 255)
+    yuv[..., 2] = np.clip(yuv[..., 2] + add_v, 0, 255)
     return yuv_to_rgb_np(yuv)
 
 
@@ -111,6 +107,9 @@ def aug_defect_cut(img_rgb: np.ndarray, severity: float) -> np.ndarray:
     out = img_rgb.copy()
 
     opt = random.choice(["top", "bottom", "left", "right"])
+    cut_pixels = cut_px_h if opt in ("top", "bottom") else cut_px_w
+    if cut_pixels <= 0:
+        return out  # -0 切片会覆盖整张图；非方形图须按选中的边检查。
     if opt == "top":
         fill_color = out[cut_px_h:min(cut_px_h + 10, h), :].mean(axis=(0, 1)).astype(np.uint8)
         out[:cut_px_h, :] = fill_color

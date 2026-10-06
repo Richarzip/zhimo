@@ -22,6 +22,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from zhimo.vision.preprocess import detect_and_fix_inversion
+from zhimo.vision.cam_utils import cam_background
 
 
 class Tensor:
@@ -36,6 +37,15 @@ class Tensor:
 
     def to(self, device):
         return self
+
+    def detach(self):
+        return self
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self.values
 
     def mean(self, dim):
         return Tensor(self.values.mean(axis=dim))
@@ -83,6 +93,7 @@ def load_inference_methods():
         "TTA_NATIVE_TRANSFORM": lambda image: Tensor([3]),
         # 反色预处理（真实实现，只依赖 numpy/PIL）
         "detect_and_fix_inversion": detect_and_fix_inversion,
+        "cam_background": cam_background,
     }
     exec(compile(ast.Module(body=[recognizer], type_ignores=[]), str(path), "exec"), scope)
     return scope["CalligrapherRecognizer"]
@@ -98,7 +109,8 @@ class CamTtaTests(unittest.TestCase):
         self.recognizer.backbone = "test"
         self.recognizer._load_model = Mock()
         self.recognizer._get_target_layers = Mock(return_value=["final_layer"])
-        self.recognizer.transform = Mock(side_effect=lambda image: Tensor([0]))
+        self.recognizer._get_cam_reshape_transform = Mock(return_value=None)
+        self.recognizer.transform = Mock(side_effect=lambda image: Tensor(np.zeros((3, 224, 224))))
         # The original image selects A; the three augmented views select B.
         self.recognizer.model = Mock(side_effect=[
             Tensor(np.log([[0.9, 0.1]])),
@@ -141,7 +153,7 @@ class CamTtaTests(unittest.TestCase):
         self.target.assert_called_once_with(1)
         self.assertEqual(self.cam.call_args.kwargs["targets"][0].category, 1)
         # The explanation is rendered against the original view.
-        np.testing.assert_array_equal(self.cam.call_args.kwargs["input_tensor"].values, [[0]])
+        np.testing.assert_array_equal(self.cam.call_args.kwargs["input_tensor"].values, np.zeros((1, 3, 224, 224)))
         self.assertIn("heatmap", result["evidence"])
 
     def test_missing_cam_dependency_retains_tta_prediction(self):

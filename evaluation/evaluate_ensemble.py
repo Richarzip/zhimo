@@ -1,15 +1,15 @@
 """
 评估软投票集成效果：convnext vs swin vs 集成（软投票）
 
-口径：从 D:\\experiment3\\dataset_total\\dataset1 每类随机抽样 N 张
-（该数据集为训练数据的一部分，模型可能见过，故准确率会偏高；
- 本脚本目的只是对比"集成 vs 单模型"的相对增益，非严格泛化测试。）
+口径：从 --data-root 指定的数据目录按类别随机抽样 N 张。
+默认目录为项目中的 dataset/test。若所选目录包含训练数据，
+准确率会偏高；比较集成增益时应明确数据来源，不能视为独立泛化测试。
 
 实现说明：每张图只对 convnext / swin 各 forward 一次，
         集成概率 = 两模型 softmax 概率平均，避免重复推理。
 
 用法：
-    python evaluation/evaluate_ensemble.py [--n 120] [--seed 42] [--out evaluation_result.txt]
+    python evaluation/evaluate_ensemble.py [--data-root DATASET_DIR] [--n 120] [--seed 42] [--out evaluation_result.txt]
 """
 
 import argparse
@@ -19,7 +19,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import torch
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,58 +26,107 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from zhimo.vision.recognizer import CalligrapherRecognizer, DEFAULT_TRANSFORM
 from zhimo.vision.preprocess import detect_and_fix_inversion
 
 
-DATASET_ROOT = r"D:\experiment3\dataset_total\dataset1"
+DATASET_ROOT = ROOT / "dataset" / "test"
 DEFAULT_OUT = os.path.join(ROOT, "evaluation_result.txt")
 
 
-def collect_samples(n_per_class: int, seed: int):
-    """每类抽样 n_per_class 张，返回 [(image_path, label), ...]"""
-    random.seed(seed)
+def collect_samples(n_per_class: int, seed: int, data_root=DATASET_ROOT):
+    """每类抽样 n_per_class 张，返回 [(image_path, label), ...]。"""
+    data_root = Path(data_root).expanduser().resolve()
+    if n_per_class <= 0:
+        raise ValueError("每类抽样数量 --n 必须为正整数")
+    if not data_root.is_dir():
+        raise ValueError(f"数据目录不存在或不是目录: {data_root}；请用 --data-root 指定数据集")
+    rng = random.Random(seed)
     samples = []
-    for cls_dir in sorted(os.listdir(DATASET_ROOT)):
-        cls_path = os.path.join(DATASET_ROOT, cls_dir)
-        if not os.path.isdir(cls_path):
+    for cls_path in sorted(data_root.iterdir()):
+        if not cls_path.is_dir():
             continue
-        # 类目录名 → 54 类标签（去掉 "-楷"/"-行" 等后缀）
-        label = cls_dir.split("-")[0]
-        files = [f for f in os.listdir(cls_path)
-                 if f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp"))]
+        # 类目录名 → 书法家标签（去掉 "-楷"/"-行" 等后缀）
+        label = cls_path.name.split("-")[0]
+        files = sorted(path for path in cls_path.iterdir()
+                       if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"})
         if not files:
-            print(f"[跳过] 空目录: {cls_dir}")
+            print(f"[跳过] 空目录: {cls_path.name}")
             continue
-        picked = random.sample(files, min(n_per_class, len(files)))
-        for f in picked:
-            samples.append((os.path.join(cls_path, f), label))
-        print(f"[抽样] {cls_dir}: {len(picked)} 张")
+        picked = rng.sample(files, min(n_per_class, len(files)))
+        samples.extend((str(path), label) for path in picked)
+        print(f"[抽样] {cls_path.name}: {len(picked)} 张")
+    if not samples:
+        raise ValueError(f"数据目录没有可评估图片: {data_root}；请按书法家建立子目录并放入 JPG/PNG/BMP 图片")
     return samples
+
+
+def _load_models():
+    """Load inference dependencies and weights only after validating the dataset."""
+    import torch
+    from zhimo.vision.recognizer import CalligrapherRecognizer, DEFAULT_TRANSFORM
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    convnext = CalligrapherRecognizer(model_path=str(ROOT / "checkpoints/convnext.pth"), device=device)
+    swin = CalligrapherRecognizer(model_path=str(ROOT / "checkpoints/swin.pth"), device=device)
+    convnext._load_model()
+    swin._load_model()
+    return device, convnext, swin, DEFAULT_TRANSFORM
+
+
+def normalize_sample_labels(samples, recognizer):
+    """Resolve Chinese directory names and checkpoint author IDs to output labels."""
+    canonical_names = set(recognizer.id_to_label.values())
+    normalized = []
+    unknown = set()
+    for path, label in samples:
+        class_id = recognizer.label_to_id.get(label)
+        if class_id is not None:
+            name = recognizer.id_to_label[class_id]
+        elif label in canonical_names:
+            name = label
+        else:
+            unknown.add(label)
+            continue
+        normalized.append((path, name))
+    if unknown:
+        raise ValueError(
+            "数据集包含权重不支持的类别: " + ", ".join(sorted(unknown))
+            + "；请使用中文书法家名或权重 label_to_id 中的作者 ID 命名子目录"
+        )
+    return normalized
 
 
 def infer_probs(rec, img_tensor, device):
     """单模型 forward → 1D softmax 概率"""
+    import torch
+
     with torch.no_grad():
         logits = rec.model(img_tensor.to(device))
     return torch.softmax(logits, dim=-1).squeeze(0).cpu()
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser()
+    parser.add_argument("--data-root", type=Path, default=DATASET_ROOT, help="数据集根目录，子目录为中文书法家名或权重中的作者 ID")
     parser.add_argument("--n", type=int, default=120, help="每类抽样数量")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--out", default=DEFAULT_OUT, help="结果输出文件")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    samples = collect_samples(args.n, args.seed)
+    try:
+        data_root = args.data_root.expanduser().resolve()
+        samples = collect_samples(args.n, args.seed, data_root=data_root)
+    except (ValueError, OSError) as exc:
+        parser.error(str(exc))
     print(f"\n共 {len(samples)} 张样本，开始评估（tta=False）...\n")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    convnext = CalligrapherRecognizer(model_path="./checkpoints/convnext.pth", device=device)
-    swin = CalligrapherRecognizer(model_path="./checkpoints/swin.pth", device=device)
-    convnext._load_model()
-    swin._load_model()
+    device, convnext, swin, transform = _load_models()
+    try:
+        if convnext.id_to_label != swin.id_to_label:
+            raise ValueError("两个模型的类别顺序不一致，无法按索引进行软投票评估")
+        samples = normalize_sample_labels(samples, convnext)
+    except ValueError as exc:
+        parser.error(str(exc))
     id_to_label = convnext.id_to_label
     print(f"[评估] 设备: {device}\n")
 
@@ -96,7 +144,7 @@ def main():
     for i, (path, label) in enumerate(samples):
         img = Image.open(path).convert("RGB")
         img, _ = detect_and_fix_inversion(img)
-        t = DEFAULT_TRANSFORM(img).unsqueeze(0)
+        t = transform(img).unsqueeze(0)
 
         p_cn = infer_probs(convnext, t, device)
         p_sw = infer_probs(swin, t, device)
@@ -136,7 +184,8 @@ def main():
     # ---------- 汇总 ----------
     lines = []
     lines.append("=" * 56)
-    lines.append("软投票集成评估结果（dataset1 抽样，tta=False）")
+    lines.append("软投票集成评估结果（按类别抽样，tta=False）")
+    lines.append(f"数据目录: {data_root}")
     lines.append("时间: %s | 样本: %d 张 | seed: %d" % (
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"), len(samples), args.seed))
     lines.append("=" * 56)
@@ -166,7 +215,7 @@ def main():
     lines.append(f"集成失误（单模型都对、集成错）: {ens_breaks}")
     lines.append(f"两个单模型都错: {both_wrong}")
     lines.append("")
-    lines.append("注: dataset1 是训练数据的一部分，准确率绝对值偏高；")
+    lines.append("注: 若所选目录包含训练数据，准确率绝对值会偏高；")
     lines.append("    以上用于对比集成相对单模型的增益，非严格泛化测试。")
 
     text = "\n".join(lines)

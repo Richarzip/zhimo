@@ -14,13 +14,15 @@ import timm
 from PIL import Image
 import torchvision.transforms as T
 
+from .cam_utils import IMAGENET_MEAN, IMAGENET_STD, cam_background
+
 
 # 推理预处理（与训练验证集保持一致）
 DEFAULT_TRANSFORM = T.Compose([
     T.Resize((256, 256)),
     T.CenterCrop(224),
     T.ToTensor(),
-    T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
 ])
 
 # 翻转 TTA
@@ -29,7 +31,7 @@ TTA_FLIP_TRANSFORM = T.Compose([
     T.CenterCrop(224),
     T.RandomHorizontalFlip(p=1.0),
     T.ToTensor(),
-    T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
 ])
 
 # 尺度 TTA（放大）
@@ -37,14 +39,14 @@ TTA_SCALE_TRANSFORM = T.Compose([
     T.Resize((288, 288)),
     T.CenterCrop(224),
     T.ToTensor(),
-    T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
 ])
 
 # 尺度 TTA（原尺寸直接 resize 到 224）
 TTA_NATIVE_TRANSFORM = T.Compose([
     T.Resize((224, 224)),
     T.ToTensor(),
-    T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
 ])
 
 
@@ -163,14 +165,33 @@ class CalligrapherRecognizer:
         if "convnext" in name:
             # timm ConvNeXt: encoder.stages[-1].blocks[-1]
             return [enc.stages[-1].blocks[-1]]
-        if "resnet" in name or "efficientnet" in name:
-            # CNN 类：最后一层特征
-            return [enc]
         if "vit" in name or "deit" in name or "beit" in name:
-            # ViT/DeiT: encoder.blocks[-1].norm1
             return [enc.blocks[-1].norm1]
-        # 兜底：直接把 encoder 当目标层（多数 CNN 可用）
-        return [enc]
+        if "resnet" in name:
+            return [enc.layer4[-1]]
+        if "efficientnet" in name:
+            return [enc.conv_head]
+        raise ValueError(f"尚未配置 {self.backbone} 的 Grad-CAM 空间特征层")
+
+    def _get_cam_reshape_transform(self):
+        """Convert transformer features to the NCHW layout required by Grad-CAM."""
+        name = self.backbone.lower()
+        enc = self.model.encoder
+        if "swin" in name:
+            # timm Swin norm1 exposes (batch, height, width, channels).
+            return lambda tensor: tensor.permute(0, 3, 1, 2)
+        if "vit" in name or "deit" in name or "beit" in name:
+            height, width = enc.patch_embed.grid_size
+            prefix_tokens = enc.num_prefix_tokens
+
+            def reshape_tokens(tensor):
+                patches = tensor[:, prefix_tokens:, :]
+                return patches.reshape(
+                    tensor.shape[0], height, width, tensor.shape[-1]
+                ).permute(0, 3, 1, 2)
+
+            return reshape_tokens
+        return None
 
     # ---------- 单张推理 ----------
 
@@ -231,12 +252,15 @@ class CalligrapherRecognizer:
             top_idx = self.label_to_id[result["calligrapher"]]
             target_layers = self._get_target_layers()
             targets = [ClassifierOutputTarget(top_idx)]
-            cam = GradCAM(model=self.model, target_layers=target_layers)
+            cam = GradCAM(
+                model=self.model,
+                target_layers=target_layers,
+                reshape_transform=self._get_cam_reshape_transform(),
+            )
             grayscale_cam = cam(input_tensor=img_tensor, targets=targets)[0]
 
-            # 叠加热力图到原图
-            img_resized = img.resize((224, 224))
-            img_np = np.array(img_resized).astype(np.float32) / 255.0
+            # 从实际输入恢复底图，保留与热力图相同的缩放/裁剪坐标。
+            img_np = cam_background(img_tensor)
             cam_image = show_cam_on_image(img_np, grayscale_cam, use_rgb=True)
 
             # 转 base64

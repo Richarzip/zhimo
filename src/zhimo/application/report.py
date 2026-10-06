@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import base64
 import json
-import textwrap
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -33,56 +33,130 @@ def _fit_image(image: Image.Image, width: int, height: int) -> Image.Image:
     return canvas
 
 
-def _draw_wrapped(draw: ImageDraw.ImageDraw, text: str, xy: tuple[int, int], width: int, font, fill=(25, 32, 48)) -> int:
-    x, y = xy
+def _wrapped_lines(text: str, width: int, font):
+    """Wrap by rendered width, including Chinese and URLs without spaces."""
     for paragraph in str(text or "").splitlines() or [""]:
-        lines = textwrap.wrap(paragraph, width=max(1, width // max(1, int(font.size * 0.95)))) or [""]
-        for line in lines:
-            draw.text((x, y), line, font=font, fill=fill)
-            y += font.size + 8
-    return y
+        if not paragraph:
+            yield ""
+            continue
+        start = 0
+        while start < len(paragraph):
+            def fits(length):
+                left, _, right, _ = font.getbbox(paragraph[start:start + length])
+                return right - left <= width
+
+            remaining = len(paragraph) - start
+            low, high = 0, 1
+            while high < remaining and fits(high):
+                low = high
+                high = min(remaining, high * 2)
+            if fits(high):
+                length = high
+            else:
+                while low + 1 < high:
+                    middle = (low + high) // 2
+                    if fits(middle):
+                        low = middle
+                    else:
+                        high = middle
+                length = max(1, low)
+            if start + length < len(paragraph):
+                # Prefer a word boundary without discarding whitespace or URL characters.
+                space = paragraph.rfind(" ", start, start + length)
+                if space > start:
+                    length = space - start + 1
+            yield paragraph[start:start + length]
+            start += length
+
+
+def _line_height(text: str, font) -> int:
+    _, top, _, bottom = font.getbbox(text)
+    return max(getattr(font, "size", 16), bottom - top) + 8
+
+
+class _ReportLayout:
+    width = 1654
+    height = 2339
+    margin = 70
+
+    def __init__(self):
+        self.pages: list[Image.Image] = []
+        self.new_page()
+
+    def new_page(self):
+        self.page = Image.new("RGB", (self.width, self.height), "white")
+        self.draw = ImageDraw.Draw(self.page)
+        self.y = self.margin
+        self.pages.append(self.page)
+
+    def ensure_space(self, height: int):
+        if self.y + height > self.height - self.margin:
+            self.new_page()
+
+    def text(self, text: str, font, *, x=70, width=1500, fill=(25, 32, 48)):
+        for line in _wrapped_lines(text, width, font):
+            line_height = _line_height(line, font)
+            self.ensure_space(line_height)
+            left, top, _, _ = font.getbbox(line)
+            # Align the visible glyph bounds to the requested position.
+            self.draw.text((x - left, self.y - top), line, font=font, fill=fill)
+            self.y += line_height
+
+    def heading(self, title: str, font, *, keep_with=0, gap=9):
+        self.ensure_space(_line_height(title, font) + gap + keep_with)
+        self.text(title, font, fill=(20, 45, 90))
+        self.y += gap
+
+    def image_pair(self, original, processed, heading_font, small_font):
+        self.heading("输入图像与预处理结果", heading_font, keep_with=570)
+        self.page.paste(_fit_image(original, 700, 500), (70, self.y))
+        self.page.paste(_fit_image(processed, 700, 500), (884, self.y))
+        self.draw.text((70, self.y + 510), "用户上传图像", font=small_font, fill=(80, 90, 105))
+        self.draw.text((884, self.y + 510), "模型输入图像", font=small_font, fill=(80, 90, 105))
+        self.y += 570
+
+    def example(self, image, title, source_url, body_font, small_font):
+        self.ensure_space(500)
+        image_page, image_y = self.page, self.y
+        self.page.paste(_fit_image(image, 700, 430), (70, image_y))
+        self.y += 20
+        self.text(title, body_font, x=884, width=650)
+        self.y += 20
+        self.text(source_url, small_font, x=884, width=650, fill=(80, 90, 105))
+        if self.page is image_page:
+            self.y = max(self.y, image_y + 430)
+        self.y += 40
 
 
 def build_pdf_report(
-    original: Image.Image,
-    processed: Image.Image,
+    original: Image.Image | None,
+    processed: Image.Image | None,
     result: dict[str, Any],
     *,
     examples: list[dict[str, Any]] | None = None,
 ) -> bytes:
-    """Build a human-readable report with visual evidence and raw results."""
-    page_w, page_h = 1654, 2339
+    """Build a human-readable report, paginating all text and visual evidence."""
     title_font = _font(42)
     heading_font = _font(28)
     body_font = _font(21)
     small_font = _font(16)
-    pages: list[Image.Image] = []
+    layout = _ReportLayout()
 
-    def new_page() -> tuple[Image.Image, ImageDraw.ImageDraw, int]:
-        page = Image.new("RGB", (page_w, page_h), "white")
-        return page, ImageDraw.Draw(page), 70
-
-    page, draw, y = new_page()
-    draw.text((70, y), "智墨书法识别与可解释性报告", font=title_font, fill=(20, 45, 90))
-    y += 85
-    y = _draw_wrapped(draw, "本报告由用户上传图像、传统图像预处理、双模型集成识别和可解释性证据生成。模型判断不是艺术史鉴定结论。", (70, y), 1500, body_font)
-    y += 25
-    draw.text((70, y), "输入图像与预处理结果", font=heading_font, fill=(20, 45, 90))
-    y += 45
-    left = _fit_image(original, 700, 500)
-    right = _fit_image(processed, 700, 500)
-    page.paste(left, (70, y))
-    page.paste(right, (884, y))
-    draw.text((70, y + 510), "用户上传图像", font=small_font, fill=(80, 90, 105))
-    draw.text((884, y + 510), "模型输入图像", font=small_font, fill=(80, 90, 105))
-    y += 570
+    layout.text("智墨书法识别与可解释性报告", title_font, fill=(20, 45, 90))
+    layout.y += 35
+    has_image = original is not None and processed is not None
+    introduction = ("本报告由用户上传图像、传统图像预处理、双模型集成识别和可解释性证据生成。模型判断不是艺术史鉴定结论。"
+                    if has_image else "本轮未附图片，以下记录对话回复及工具返回的结果。")
+    layout.text(introduction, body_font)
+    layout.y += 25
+    if has_image:
+        layout.image_pair(original, processed, heading_font, small_font)
 
     recognition = result.get("recognition") or {}
-    draw.text((70, y), "最终结果", font=heading_font, fill=(20, 45, 90))
-    y += 48
+    layout.heading("最终结果", heading_font, keep_with=_line_height("正文", body_font))
     summary = result.get("summary") or result.get("reply") or "未生成文本摘要。"
-    y = _draw_wrapped(draw, summary, (70, y), 1500, body_font)
-    y += 18
+    layout.text(summary, body_font)
+    layout.y += 18
     ensemble = recognition.get("ensemble") or {}
     details = [
         f"书法家：{recognition.get('calligrapher', '-')}",
@@ -91,58 +165,46 @@ def build_pdf_report(
         f"集成策略：{ensemble.get('strategy', '-')}",
         f"双模型一致：{ensemble.get('agreement', '-')}",
     ]
-    y = _draw_wrapped(draw, "\n".join(details), (70, y), 1500, body_font)
-    y += 20
+    layout.text("\n".join(details), body_font)
+    layout.y += 20
     quality = result.get("quality") or {}
     if quality:
-        y = _draw_wrapped(draw, "图像质量：" + json.dumps(quality, ensure_ascii=False), (70, y), 1500, small_font)
+        layout.text("图像质量：" + json.dumps(quality, ensure_ascii=False), small_font)
 
     heatmap = (recognition.get("evidence") or {}).get("heatmap")
     if heatmap:
-        if isinstance(heatmap, str) and heatmap.startswith("data:"):
-            import base64
-            heatmap = base64.b64decode(heatmap.split(",", 1)[1])
-        if isinstance(heatmap, str):
-            import base64
-            heatmap = base64.b64decode(heatmap)
         try:
-            heat = Image.open(BytesIO(heatmap))
-            y += 18
-            draw.text((70, y), "Grad-CAM 关注区域", font=heading_font, fill=(20, 45, 90))
-            page.paste(_fit_image(heat, 700, 430), (70, y + 45))
-            y += 500
+            if isinstance(heatmap, str):
+                heatmap = base64.b64decode(heatmap.split(",", 1)[1] if heatmap.startswith("data:") else heatmap)
+            with Image.open(BytesIO(heatmap)) as heat:
+                heat_image = _fit_image(heat, 700, 430)
         except Exception:
-            pass
+            heat_image = None
+        if heat_image is not None:
+            layout.y += 18
+            layout.heading("Grad-CAM 关注区域", heading_font, keep_with=450)
+            layout.page.paste(heat_image, (70, layout.y))
+            layout.y += 450
 
     knowledge = result.get("knowledge")
     if knowledge:
-        if y > page_h - 450:
-            pages.append(page)
-            page, draw, y = new_page()
-        draw.text((70, y), "知识库依据", font=heading_font, fill=(20, 45, 90))
-        y += 45
-        _draw_wrapped(draw, str(knowledge), (70, y), 1500, small_font)
+        layout.heading("知识库依据", heading_font, keep_with=_line_height("正文", small_font))
+        layout.text(str(knowledge), small_font)
 
     if examples:
-        pages.append(page)
-        page, draw, y = new_page()
-        draw.text((70, y), "书法家作品示例", font=heading_font, fill=(20, 45, 90))
-        y += 55
+        layout.new_page()
+        layout.heading("书法家作品示例", heading_font, keep_with=500, gap=19)
         for example in examples[:4]:
             try:
-                image = Image.open(example["path"])
-                page.paste(_fit_image(image, 700, 430), (70, y))
-                draw.text((884, y + 20), str(example.get("title") or "作品示例"), font=body_font, fill=(25, 32, 48))
-                _draw_wrapped(draw, str(example.get("source_url") or ""), (884, y + 70), 650, small_font, fill=(80, 90, 105))
-                y += 500
-                if y > page_h - 500:
-                    pages.append(page)
-                    page, draw, y = new_page()
+                with Image.open(example["path"]) as source:
+                    image = source.convert("RGB")
             except Exception:
                 continue
+            layout.example(
+                image, str(example.get("title") or "作品示例"),
+                str(example.get("source_url") or ""), body_font, small_font,
+            )
 
-    pages.append(page)
     output = BytesIO()
-    pages[0].save(output, format="PDF", save_all=True, append_images=pages[1:], resolution=150)
+    layout.pages[0].save(output, format="PDF", save_all=True, append_images=layout.pages[1:], resolution=150)
     return output.getvalue()
-

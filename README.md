@@ -149,6 +149,15 @@ python -m pip install -r requirements.txt
 
 当前依赖文件包含 `torch`、`torchvision`、`timm`、`aiohttp`、`Pillow`、`opencv-python`、`chromadb`、`langchain`、`langgraph`、`langchain-ollama`、`langchain-deepseek` 等核心包。
 
+完整依赖包含训练所需的 `matplotlib`、`seaborn` 和 `scikit-learn`。只运行训练时，也可以安装独立依赖组：
+
+```powershell
+python -m pip install -e ".[train]"
+python training/train.py --help
+```
+
+该依赖组包含训练脚本直接使用的 PyTorch、torchvision、timm、NumPy、Pillow、tqdm 和指标/绘图库，不需要启动 Agent、Chroma 或 Ollama。CUDA 用户可先安装与本机驱动匹配的 PyTorch / torchvision，再安装此依赖组。
+
 可选依赖说明：
 
 - `predict_with_cam` 需要 `grad-cam` 包。如果缺失，普通识别仍可运行。
@@ -299,11 +308,15 @@ python training/train.py
 python training/train.py --epochs 10 --batch_size 32 --backbone convnext_tiny
 ```
 
+`--max_samples` 接受正整数，分别限制训练集和验证集的样本数，省略时使用全部样本。`batch_size` 必须至少为 2，训练集至少需要 2 张图片；只有恰好剩下 1 张的训练尾批会被舍弃，其余尾批及全部验证样本都会保留。
+
 断点恢复：
 
 ```powershell
 python training/train.py --resume ./checkpoints_test_gelu/calligrapher_classifier_e10.pth
 ```
+
+续训会恢复模型、优化器、学习率调度器，以及新检查点中记录的随机数、早停状态和历史曲线。缺少优化器或调度器的文件不能用于完整续训；旧检查点缺少随机数或历史状态时会给出说明。历史最佳准确率与本轮准确率分别保存，较差的新轮次不会覆盖已有最佳模型。
 
 训练输出包括：
 
@@ -430,13 +443,17 @@ python research/baidu_knowledge_audit.py
 
 网页左侧可以分别选择传统去噪、显示书法家作品示例和生成 PDF。PDF 由 `zhimo.application.report` 使用 Pillow 生成，包含用户原图、模型输入图、识别结果、置信度/可靠性、双模型集成信息、质量评估、Grad-CAM（若可用）、知识库依据和作品来源。报告通过网页的“Download PDF report”按钮下载，不会自动下载。
 
+人物审计现在同时检查目标时代和书法身份，证据不足或同名冲突时保留旧知识并标记复核。张旭记录的更正依据与旧审计处置见 [人物身份核对说明](research/IDENTITY_AUDIT.md)。
+
 ## 评估和研究脚本
 
-集成模型评估实现位于 `evaluation/evaluate_ensemble.py`，兼容命令仍可用：
+集成模型评估实现位于 `evaluation/evaluate_ensemble.py`，通过 `--data-root` 指定按书法家分目录的图片集：
 
 ```powershell
-python evaluation/evaluate_ensemble.py --n 120 --seed 42
+python evaluation/evaluate_ensemble.py --data-root ./dataset/test --n 120 --seed 42
 ```
+
+评估默认读取项目目录下的 `dataset/test`。子目录可以是中文书法家名或权重中记录的作者 ID（如 `wxz`），也支持中文名后加 `-楷`、`-行` 等后缀。不存在、空白的数据目录会在加载模型前报错，未识别的类别或两份权重标签顺序不一致也会报错。报告记录实际数据目录；使用训练数据评估时，不能把准确率当作独立测试集结果。
 
 评估结果默认写入项目根目录的 `evaluation_result.txt`；也可以通过 `--out` 指定路径。训练默认输出仍写入项目根目录的 `checkpoints_test_gelu/`。
 

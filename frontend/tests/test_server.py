@@ -39,6 +39,13 @@ def form_for(payload=None, **fields):
     return form
 
 
+def text_form(*, multipart, **fields):
+    form = FormData()
+    for name, value in fields.items():
+        form.add_field(name, value, **({"content_type": "text/plain"} if multipart else {}))
+    return form
+
+
 class APIRegressionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.cancelled = asyncio.Event()
@@ -140,7 +147,7 @@ class APIRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.mock_single.assert_not_called()
         await self.assert_ready_again()
 
-    async def test_missing_image_and_non_multipart_are_rejected(self):
+    async def test_missing_image_and_non_form_requests_are_rejected(self):
         form = FormData()
         form.add_field("prompt", "why", content_type="text/plain")
         response = await self.client.post("/api/analyze", data=form)
@@ -148,6 +155,159 @@ class APIRegressionTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post("/api/analyze", json={"image": "not a file"})
         await self.assert_response(response, 400, "invalid_request")
         self.mock_single.assert_not_called()
+        await self.assert_ready_again()
+
+    async def test_chat_accepts_text_or_prompt_without_decoding_an_image(self):
+        for multipart in (False, True):
+            for content in ({"text": " 王羲之的代表作？ "}, {"prompt": " 王羲之的代表作？ "},
+                            {"text": "  ", "prompt": " 王羲之的代表作？ "}):
+                with self.subTest(multipart=multipart, fields=content):
+                    fields = {"mode": "chat", "session_id": "text-session", **content}
+                    with patch.object(server, "run_chat", return_value={"reply": "兰亭序"}) as chat, \
+                         patch.object(server, "decode_image", side_effect=AssertionError("text has no image")) as decode:
+                        response = await self.client.post("/api/analyze", data=text_form(multipart=multipart, **fields))
+                        data = await self.assert_response(response, 200)
+                        self.assertEqual(data["reply"], "兰亭序")
+                        chat.assert_called_once_with(None, {name: value.strip() for name, value in fields.items()})
+                        decode.assert_not_called()
+        self.mock_single.assert_not_called()
+
+    async def test_text_chat_runs_the_real_pipeline_and_preserves_the_session_across_turns(self):
+        # Load the application before patching sys.modules so the temporary
+        # LangChain message stub cannot unload NumPy or other native modules.
+        importlib.import_module("zhimo.application.pipeline")
+
+        class HumanMessage:
+            type = "human"
+
+            def __init__(self, *, content, id):
+                self.content = content
+                self.id = id
+
+        messages_module = types.ModuleType("langchain.messages")
+        messages_module.HumanMessage = HumanMessage
+        history = []
+        turns = []
+        agent = Mock()
+        agent.get_state.side_effect = lambda config: types.SimpleNamespace(values={"messages": list(history)})
+
+        def invoke(payload, config):
+            turn = payload["messages"][0]
+            turns.append((turn, config["configurable"]["thread_id"]))
+            expected = len(turns) == 1
+            self.assertEqual(payload["analysis_options"], {
+                "rag": expected, "cam": expected, "tta": not expected,
+                "analysis_mode": "single" if expected else "multi",
+            })
+            history.extend([turn, types.SimpleNamespace(
+                type="ai", id=f"reply-{len(turns)}", content=f"回答 {len(turns)}", tool_calls=[],
+            )])
+            return {"messages": list(history)}
+
+        agent.invoke.side_effect = invoke
+        denoiser = Mock(side_effect=AssertionError("text-only turns must not denoise"))
+        questions = ("王羲之的代表作有哪些？", "第二部作品是什么风格？")
+        with patch.dict(sys.modules, {"langchain.messages": messages_module}), \
+             patch.object(server, "get_agent", return_value=agent), \
+             patch.object(server, "get_denoiser", return_value=denoiser):
+            for index, question in enumerate(questions, start=1):
+                response = await self.client.post("/api/analyze", data=text_form(
+                    multipart=index == 2, mode="chat", session_id="integration-session",
+                    text=question, denoise="true",
+                    rag="true" if index == 1 else "false",
+                    cam="true" if index == 1 else "false",
+                    tta="false" if index == 1 else "true",
+                    analysis_mode="single" if index == 1 else "multi",
+                ))
+                data = await self.assert_response(response, 200)
+                self.assertEqual(data["reply"], f"回答 {index}")
+                self.assertEqual(data["mode"], "chat")
+                self.assertEqual(data["session_id"], "integration-session")
+                self.assertEqual(data["message_count"], 2 * index)
+                self.assertEqual(data["denoise"], {"enabled": False, "method": "no_image"})
+        denoiser.assert_not_called()
+        self.assertEqual(agent.invoke.call_count, 2)
+        self.assertEqual([session for _, session in turns], ["integration-session"] * 2)
+        self.assertEqual([turn.content for turn, _ in turns],
+                         [[{"type": "text", "text": question}] for question in questions])
+        self.assertNotEqual(turns[0][0].id, turns[1][0].id)
+
+    async def test_empty_chat_and_image_modes_without_an_image_are_rejected(self):
+        for multipart in (False, True):
+            for fields, error in (({"mode": "chat", "text": "  ", "prompt": "\t"}, "missing_input"),
+                                  ({"mode": "chat"}, "missing_input"),
+                                  ({"mode": "single", "text": "why"}, "missing_image"),
+                                  ({"mode": "multi", "text": "why"}, "missing_image"),
+                                  ({"text": "why"}, "missing_image")):
+                with self.subTest(multipart=multipart, fields=fields):
+                    response = await self.client.post("/api/analyze", data=text_form(multipart=multipart, **fields))
+                    await self.assert_response(response, 400, error)
+        await self.assert_ready_again()
+
+    async def test_chat_does_not_ignore_an_explicit_invalid_image(self):
+        with patch.object(server, "run_chat") as chat:
+            for payload in (b"", b"not an image", image_bytes()[:40], image_bytes("TIFF")):
+                with self.subTest(payload_size=len(payload)):
+                    response = await self.client.post("/api/analyze", data=form_for(payload, mode="chat", text="why"))
+                    await self.assert_response(response, 400, "invalid_image")
+            chat.assert_not_called()
+        await self.assert_ready_again()
+
+    async def test_chat_with_an_image_still_decodes_and_passes_it_to_the_chat_pipeline(self):
+        def chat(image, fields):
+            self.assertEqual(image.size, (8, 8))
+            self.assertEqual(fields["session_id"], "image-session")
+            return {"reply": "done"}
+
+        with patch.object(server, "run_chat", side_effect=chat) as mock_chat:
+            response = await self.client.post("/api/analyze", data=form_for(mode="chat", session_id="image-session"))
+            await self.assert_response(response, 200)
+            mock_chat.assert_called_once()
+
+    async def test_text_forms_reject_unknown_duplicate_and_invalid_options(self):
+        invalid = [{"unknown": "value"}, {"mode": "wrong"}, {"analysis_mode": "wrong"}]
+        invalid.extend({name: "yes"} for name in ("tta", "cam", "rag", "denoise", "examples", "pdf"))
+        for multipart in (False, True):
+            for extra in invalid:
+                with self.subTest(multipart=multipart, extra=extra):
+                    fields = {"mode": "chat", "text": "why", **extra}
+                    response = await self.client.post("/api/analyze", data=text_form(multipart=multipart, **fields))
+                    await self.assert_response(response, 400, "invalid_request")
+            duplicate = text_form(multipart=multipart, mode="chat", text="why")
+            duplicate.add_field("text", "again")
+            response = await self.client.post("/api/analyze", data=duplicate)
+            await self.assert_response(response, 400, "invalid_request")
+        await self.assert_ready_again()
+
+    async def test_text_forms_enforce_utf8_byte_field_limits(self):
+        for multipart in (False, True):
+            with self.subTest(multipart=multipart), patch.object(server, "MAX_FIELD_BYTES", 6):
+                with patch.object(server, "run_chat", return_value={"reply": "done"}):
+                    response = await self.client.post("/api/analyze", data=text_form(multipart=multipart, mode="chat", text="墨字"))
+                    await self.assert_response(response, 200)
+                response = await self.client.post("/api/analyze", data=text_form(multipart=multipart, mode="chat", text=" 墨字 "))
+                await self.assert_response(response, 413, "upload_too_large")
+        await self.assert_ready_again()
+
+    async def test_text_forms_enforce_total_request_limit_with_and_without_content_length(self):
+        for multipart in (False, True):
+            for chunked in (False, True):
+                with self.subTest(multipart=multipart, chunked=chunked), patch.object(server, "MAX_REQUEST_BYTES", 64):
+                    response = await self.client.post("/api/analyze", data=text_form(multipart=multipart, mode="chat", text="x" * 64),
+                                                      chunked=chunked or None)
+                    await self.assert_response(response, 413, "upload_too_large")
+        await self.assert_ready_again()
+
+    async def test_text_forms_reject_invalid_utf8_and_non_file_image_fields(self):
+        for body in (b"mode=chat&text=%ff", b"mode=chat&text=\xff", b"mode=chat&text=why&image=bad", b"mode=chat&text"):
+            with self.subTest(body=body):
+                response = await self.client.post("/api/analyze", data=body,
+                                                  headers={"Content-Type": "application/x-www-form-urlencoded"})
+                await self.assert_response(response, 400, "invalid_request")
+        form = text_form(multipart=True, mode="chat")
+        form.add_field("text", b"\xff", filename="text", content_type="text/plain")
+        response = await self.client.post("/api/analyze", data=form)
+        await self.assert_response(response, 400, "invalid_request")
         await self.assert_ready_again()
 
     async def test_internal_error_returns_json_and_releases_worker(self):
@@ -257,10 +417,15 @@ class RecognitionContractTests(unittest.TestCase):
         knowledge = types.ModuleType("calligrapher_tool")
         self.search = knowledge.search_knowledge = Mock()
         self.search.invoke.return_value = "风格材料"
+        denoising = types.ModuleType("image_denoise")
+        denoising.denoise_image = Mock(side_effect=lambda image: (image, {}))
+        preprocessing = types.ModuleType("image_preprocess")
+        preprocessing.detect_and_fix_inversion = Mock(side_effect=lambda image: (image, {"was_inverted": False}))
         segmentation = types.ModuleType("segment")
         segmentation.segment_auto = Mock(return_value={"boxes": [[0, 0, 4, 8], [4, 0, 4, 8]], "method": "stub"})
         self.modules = patch.dict(sys.modules, {
             "image_quality": quality, "calligrapher_tool": knowledge, "segment": segmentation,
+            "image_denoise": denoising, "image_preprocess": preprocessing,
         })
         self.modules.start()
         self.addCleanup(self.modules.stop)

@@ -22,6 +22,7 @@ from PIL import Image
 
 from .recognizer_impl import CalligrapherRecognizer, DEFAULT_TRANSFORM
 from .preprocess_impl import detect_and_fix_inversion
+from .cam_utils import cam_background
 
 
 class EnsembleRecognizer:
@@ -210,12 +211,15 @@ class EnsembleRecognizer:
             img_tensor = DEFAULT_TRANSFORM(img).unsqueeze(0).to(self.device)
             target_layers = chosen._get_target_layers()
             targets = [ClassifierOutputTarget(top_idx)]
-            cam = GradCAM(model=chosen.model, target_layers=target_layers)
+            cam = GradCAM(
+                model=chosen.model,
+                target_layers=target_layers,
+                reshape_transform=chosen._get_cam_reshape_transform(),
+            )
             grayscale_cam = cam(input_tensor=img_tensor, targets=targets)[0]
 
-            # 叠加热力图到原图
-            img_resized = img.resize((224, 224))
-            img_np = np.array(img_resized).astype(np.float32) / 255.0
+            # 使用同一输入张量恢复底图，避免中心裁剪后叠图发生错位。
+            img_np = cam_background(img_tensor)
             cam_image = show_cam_on_image(img_np, grayscale_cam, use_rgb=True)
 
             pil_cam = Image.fromarray(cam_image)
