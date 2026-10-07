@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import io
+import json
 import struct
 import sys
 import threading
@@ -128,6 +129,40 @@ class APIRegressionTests(unittest.IsolatedAsyncioTestCase):
         payload[29:33] = struct.pack(">I", zlib.crc32(payload[12:29]) & 0xffffffff)
         response = await self.client.post("/api/analyze", data=form_for(bytes(payload)))
         await self.assert_response(response, 413, "image_too_large")
+
+    async def test_export_chat_returns_pdf_data_url(self):
+        entries = [
+            {"role": "user", "text": "帮我看这幅字", "image": None},
+            {"role": "ai", "text": "识别为 褚遂良，置信度 0.40", "recognition": {"calligrapher": "褚遂良", "confidence": 0.4011}},
+        ]
+        response = await self.client.post(
+            "/api/export", data=json.dumps({"entries": entries}),
+            headers={"Content-Type": "application/json"},
+        )
+        await self.assert_response(response, 200)
+        data = await response.json()
+        pdf = data["pdf"]
+        self.assertTrue(pdf["filename"].endswith(".pdf"))
+        self.assertTrue(pdf["data_url"].startswith("data:application/pdf;base64,"))
+        decoded = server.base64.b64decode(pdf["data_url"].split(",", 1)[1])
+        self.assertTrue(decoded.startswith(b"%PDF"))
+
+    async def test_export_chat_rejects_invalid_payload(self):
+        for payload in (None, {}, {"entries": []}, {"entries": "nope"}):
+            with self.subTest(payload=payload):
+                response = await self.client.post(
+                    "/api/export", data=json.dumps(payload),
+                    headers={"Content-Type": "application/json"},
+                )
+                await self.assert_response(response, 400)
+
+    async def test_export_chat_rejects_too_many_entries(self):
+        entries = [{"role": "user", "text": "x", "image": None}] * (server.MAX_EXPORT_ENTRIES + 1)
+        response = await self.client.post(
+            "/api/export", data=json.dumps({"entries": entries}),
+            headers={"Content-Type": "application/json"},
+        )
+        await self.assert_response(response, 400, "too_many_entries")
         self.mock_single.assert_not_called()
         await self.assert_ready_again()
 

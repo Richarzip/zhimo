@@ -3,6 +3,7 @@
 from .tools_impl import (
     analyze_calligraphy,
     analyze_multi_char,
+    export_pdf,
     identify_calligrapher,
     search_knowledge,
 )
@@ -12,4 +13,5 @@ __all__ = [
     "analyze_calligraphy",
     "analyze_multi_char",
     "search_knowledge",
+    "export_pdf",
 ]

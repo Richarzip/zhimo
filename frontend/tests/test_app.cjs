@@ -31,6 +31,8 @@ function fixture({deferImages = false, healthStatus = 200} = {}) {
   const images = [];
   const urls = new Map();
   const revoked = [];
+  const alerts = [];
+  const downloads = [];
   let nextUrl = 0;
   class MockImage {
     set src(url) {
@@ -52,7 +54,16 @@ function fixture({deferImages = false, healthStatus = 200} = {}) {
     }];
   }));
   const context = vm.createContext({
-    document: { getElementById: el, querySelectorAll: () => Object.values(modes) },
+    alert: (message) => alerts.push(String(message)),
+    document: {
+      getElementById: el,
+      querySelectorAll: () => Object.values(modes),
+      createElement: (tag) => ({
+        tagName: String(tag).toUpperCase(),
+        href: '', download: '',
+        click: () => downloads.push(String(tag)),
+      }),
+    },
     URL: {
       createObjectURL(file) { const url = `blob:${++nextUrl}:${file.name}`; urls.set(url, file); return url; },
       revokeObjectURL(url) { revoked.push(url); },
@@ -66,7 +77,7 @@ function fixture({deferImages = false, healthStatus = 200} = {}) {
     },
   });
   vm.runInContext(source + '\nthis.api = {setFile, analyze, resetAll, resetChat, renderQuality};', context);
-  return {api: context.api, el, pending, images, revoked, modes};
+  return {api: context.api, el, pending, images, revoked, modes, alerts, downloads};
 }
 const file = (name = 'image.png', extra = {}) => ({name, type: 'image/png', size: 1024, ...extra});
 const success = (author = '王羲之') => ({mode: 'single', recognition: {calligrapher: author, confidence: 0.8}, quality: {overall: 0}});
@@ -104,7 +115,8 @@ test('old response and finally cannot affect a new pending request', async () =>
   respond(f.pending[1], success('B'));
   await b;
   assert.equal(f.el('calligrapher').textContent, 'B');
-  assert.match(f.el('preview').src, /B\.png/);
+  // 图片已随发送清空输入栏预览（对话气泡中的图片不受影响）
+  assert.equal(f.el('preview').src, '');
 });
 
 test('old failure cannot overwrite a newer completed result', async () => {
@@ -140,9 +152,12 @@ test('HTTP and business errors are failures even with valid JSON', async (t) => 
       respond(f.pending[0], {error: 'test_error', message: '请求失败'}, status);
       await p;
       assert.equal(f.el('runState').textContent, '失败');
-      assert.equal(f.el('analyzeBtn').disabled, false);
-      assert.match(f.el('qualityGrid').innerHTML, /未评估/);
+      // 从未有过识别数据时，纯错误轮次保持结果区为空（不渲染"未评估"占位）
+      assert.equal(f.el('qualityGrid').innerHTML, '');
       assert.doesNotMatch(f.el('qualityGrid').innerHTML, /0\.000/);
+      // 图片已随发送清空；重新上传后按钮恢复可点（setFile 会清空结果区，放最后）
+      await f.api.setFile(file());
+      assert.equal(f.el('analyzeBtn').disabled, false);
     });
   }
 });
@@ -154,7 +169,6 @@ test('HTTP failure is detected even without a business error field', async () =>
   respond(f.pending[0], {message: '服务暂不可用'}, 503);
   await p;
   assert.equal(f.el('runState').textContent, '失败');
-  assert.equal(f.el('summary').textContent, '服务暂不可用');
 });
 
 test('non-JSON HTTP errors retain the HTTP status in the diagnostic', async () => {
@@ -176,6 +190,7 @@ test('network failure and malformed JSON payloads recover the submit button', as
       respond(f.pending[0], payload);
       await p;
       assert.equal(f.el('runState').textContent, '失败');
+      await f.api.setFile(file());
       assert.equal(f.el('analyzeBtn').disabled, false);
     });
   }
@@ -185,6 +200,7 @@ test('network failure and malformed JSON payloads recover the submit button', as
   f.pending[0].reject(new TypeError('offline'));
   await p;
   assert.equal(f.el('runState').textContent, '失败');
+  await f.api.setFile(file());
   assert.equal(f.el('analyzeBtn').disabled, false);
 });
 
@@ -318,7 +334,8 @@ test('each completed or failed request replaces its loading bubble', async (t) =
       assert.doesNotMatch(chat, /chat-loading/);
       assert.equal((chat.match(/chat-msg ai/g) || []).length, 1);
       assert.match(chat, outcome === 'success' ? /本轮回答/ : /失败|取消/);
-      assert.equal(f.el('analyzeBtn').disabled, outcome === 'success');
+      // 发送后输入区（文本+图片）即被清空：请求结束后按钮应为禁用，重新输入会恢复
+      assert.equal(f.el('analyzeBtn').disabled, true);
     });
   }
 });
@@ -342,7 +359,7 @@ test('changing files finishes the cancelled bubble without affecting a newer rep
   assert.equal((f.el('chatList').innerHTML.match(/chat-msg ai/g) || []).length, 2);
 });
 
-test('a later turn clears absent evidence, diagnostics, references and PDF actions', async (t) => {
+test('a later conversational turn keeps the latest recognition results', async (t) => {
   for (const secondResponse of [{mode: 'chat', reply: '普通回答'}, {error: 'test', message: '本轮失败'}]) {
     await t.test(secondResponse.error ? 'failure' : 'success', async () => {
       const f = fixture();
@@ -358,7 +375,7 @@ test('a later turn clears absent evidence, diagnostics, references and PDF actio
         pdf: {data_url: 'data:application/pdf;base64,old', filename: 'old.pdf'},
       });
       await first;
-      for (const id of ['camFigure', 'segFigure', 'diagnostic', 'referenceBox', 'reportActions']) {
+      for (const id of ['segFigure', 'diagnostic', 'referenceBox', 'reportActions']) {
         assert.equal(f.el(id).classList.contains('hidden'), false);
       }
       assert.equal(typeof f.el('downloadPdfBtn').onclick, 'function');
@@ -366,14 +383,18 @@ test('a later turn clears absent evidence, diagnostics, references and PDF actio
       const second = f.api.analyze();
       respond(f.pending[1], secondResponse, secondResponse.error ? 500 : 200);
       await second;
-      for (const id of ['camFigure', 'segFigure', 'diagnostic', 'referenceBox', 'reportActions']) {
-        assert.equal(f.el(id).classList.contains('hidden'), true);
+      // 纯对话/错误轮次不带识别产物：结果区保持上一轮最新非空数据
+      for (const id of ['segFigure', 'diagnostic', 'referenceBox', 'reportActions']) {
+        assert.equal(f.el(id).classList.contains('hidden'), false);
       }
-      for (const id of ['camImage', 'segImage']) assert.equal(f.el(id).src, '');
-      assert.equal(f.el('diagnostic').innerHTML, '');
-      assert.equal(f.el('referenceGrid').innerHTML, '');
-      assert.equal(f.el('referenceNote').textContent, '');
-      assert.equal(f.el('downloadPdfBtn').onclick, null);
+      assert.equal(f.el('segImage').src, 'data:image/png;base64,boxes');
+      assert.match(f.el('diagnostic').innerHTML, /旧诊断/);
+      assert.match(f.el('referenceGrid').innerHTML, /old\.jpg/);
+      assert.equal(f.el('referenceNote').textContent, '旧备注');
+      assert.equal(typeof f.el('downloadPdfBtn').onclick, 'function');
+      // 本轮信息仍更新：模式标签与原始 JSON
+      assert.equal(f.el('resultMode').textContent, secondResponse.error ? '异常' : '对话');
+      assert.match(f.el('rawJson').textContent, secondResponse.error ? /本轮失败/ : /普通回答/);
     });
   }
 });
@@ -382,21 +403,29 @@ test('history retains image URLs across rerenders and a new chat releases only u
   const f = fixture();
   await f.api.setFile(file('A.png'));
   const firstUrl = f.el('preview').src;
-  for (let turn = 0; turn < 2; turn++) {
-    const request = f.api.analyze();
-    respond(f.pending[turn], {mode: 'chat', reply: '回答'});
-    await request;
-  }
+  // 第一轮：带图发送（发送后输入栏预览清空，但对话气泡保留图片引用）
+  const request0 = f.api.analyze();
+  respond(f.pending[0], {mode: 'chat', reply: '回答'});
+  await request0;
+  assert.equal(f.el('preview').src, '');
+  // 第二轮：纯文本追问，不再自动携带旧图
+  f.el('prompt').value = '追问';
+  const request1 = f.api.analyze();
+  respond(f.pending[1], {mode: 'chat', reply: '回答2'});
+  await request1;
+  // 重新上传 B 再分析
   await f.api.setFile(file('B.png'));
   const currentUrl = f.el('preview').src;
   const next = f.api.analyze();
   respond(f.pending[2], {mode: 'chat', reply: '新图片回答'});
   await next;
+  // A、B 均被对话消息引用，未提前释放
   assert.deepEqual(f.revoked, []);
-  assert.equal(f.el('chatList').innerHTML.split(firstUrl).length - 1, 2);
+  assert.equal(f.el('chatList').innerHTML.split(firstUrl).length - 1, 1);
   f.api.resetChat();
-  assert.deepEqual(f.revoked, [firstUrl]);
-  assert.equal(f.el('preview').src, currentUrl);
+  // resetChat 清空消息后释放全部图片（输入栏预览已空，无保留项）
+  assert.deepEqual(f.revoked, [firstUrl, currentUrl]);
+  assert.equal(f.el('preview').src, '');
   assert.doesNotMatch(f.el('chatList').innerHTML, /chat-img/);
   f.api.resetAll();
   assert.deepEqual(f.revoked, [firstUrl, currentUrl]);
@@ -430,14 +459,14 @@ test('reset starts a new server session and an old response cannot restore clear
   await first;
   assert.match(f.el('chatList').innerHTML, /新会话|新回答/);
   assert.doesNotMatch(f.el('chatList').innerHTML, /旧会话|旧回答|chat-loading/);
-  assert.equal(f.el('summary').textContent, '新回答');
 });
 
 test('analysis mode selection is sent while preserving conversational requests', async () => {
   const f = fixture();
-  await f.api.setFile(file());
   for (const [index, mode] of ['auto', 'multi', 'single'].entries()) {
     if (mode !== 'auto') f.modes[mode].listeners.get('click')();
+    // 图片随发送清空，每次分析前重新上传
+    await f.api.setFile(file());
     const request = f.api.analyze();
     const fields = f.pending[index].options.body.entries;
     assert.equal(fields.get('mode'), 'chat');
@@ -465,4 +494,32 @@ test('leaving multi-character mode restores the previous CAM preference', async 
       assert.equal(f.el('camToggle').checked, checked);
     });
   }
+});
+
+test('agent export_pdf tool call triggers a conversation export request', async () => {
+  const f = fixture();
+  await f.api.setFile(file());
+  f.el('prompt').value = '帮我导出成 PDF';
+  const p = f.api.analyze();
+  // Agent 回复并调用了 export_pdf 工具
+  respond(f.pending[0], {
+    mode: 'chat',
+    reply: '好的，正在为您导出对话为 PDF。',
+    steps: [{name: 'export_pdf', status: 'ok'}],
+  });
+  await p;
+  // exportConversationPdf 内部先 fetch 用户图片（blob URL）→ 拒绝让它走 image=null 分支
+  assert.ok(f.pending[1], '图片 fetch 应已发起');
+  f.pending[1].reject(new Error('no blob in test'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  // 随后应发起 /api/export 请求，携带对话 entries
+  assert.ok(f.pending[2], '导出请求应已发起');
+  const exportRequest = f.pending[2];
+  assert.equal(exportRequest.options.method, 'POST');
+  const body = JSON.parse(exportRequest.options.body);
+  assert.ok(Array.isArray(body.entries));
+  assert.equal(body.entries[0].role, 'user');
+  assert.equal(body.entries[1].role, 'ai');
+  respond(exportRequest, {pdf: {filename: 'zhimo_chat.pdf', data_url: 'data:application/pdf;base64,QUJD'}});
+  await new Promise((resolve) => setTimeout(resolve, 0));
 });

@@ -25,6 +25,7 @@ from .tools_impl import (
     analyze_calligraphy,
     search_knowledge,
     analyze_multi_char,
+    export_pdf,
 )
 
 # 增强版系统提示词：要求结构化、有依据、内容丰富的鉴赏回答，并支持多轮对话
@@ -64,6 +65,7 @@ SYSTEM_PROMPT = """你是一位严谨的书法鉴赏专家，负责从图片证�
 5. 若 analyze_multi_char 的 note 说明切分可能有误差，必须在回答中如实告知用户。
 6. 仅在 ensemble 有值时说明多模型判断，并如实转述成员与分歧；ensemble 为 None 或缺失时不得声称双模型一致。
 7. 用 Markdown 组织回答：适当使用加粗、小标题、列表，让内容层次清晰，但不要过度堆砌。
+8. 用户要求导出对话/识别结果（"导出 PDF"、"生成报告"、"存成文件"等）时，调用 export_pdf 工具确认导出意图，并告知正在导出、生成后自动下载。
 """
 
 
@@ -146,6 +148,7 @@ def create_calligraphy_agent(checkpointer=None):
             analyze_calligraphy,
             search_knowledge,
             analyze_multi_char,
+            export_pdf,
         ],
         system_prompt=SYSTEM_PROMPT,
         state_schema=CalligraphyState,

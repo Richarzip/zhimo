@@ -167,8 +167,8 @@ class EnsembleRecognizer:
                 self._member_probs(rec, img_tensor) for rec in self._members
             ]
 
-        # 软投票：平均概率
-        probs = torch.stack(member_probs, dim=0).mean(dim=0)
+        # 软投票：加权平均（ConvNeXt 0.55 : Swin 0.45）
+        probs = 0.55 * member_probs[0] + 0.45 * member_probs[1]
         return self._build_result(probs, member_probs)
 
     # ---------- 带 Grad-CAM ----------

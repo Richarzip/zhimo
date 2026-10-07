@@ -29,6 +29,20 @@ def get_recognizer():
     return _recognizer
 
 
+def _text_evidence(evidence: dict) -> dict:
+    """只把文本化的可解释性信号给 LLM。
+
+    evidence 里含 heatmap base64（几十 KB 的字符串）：文本模型读不了图，
+    只会白占上下文 token；且热力图有时关注背景，展示在回复里是减分项。
+    这里只保留 attention_note / cam_model / error 等文字字段。
+    """
+    return {
+        key: evidence.get(key)
+        for key in ("attention_note", "cam_model", "error")
+        if evidence.get(key) is not None
+    }
+
+
 # 辅助函数：从 Agent 状态里提取图片 
 def extract_image_from_state(state: dict) -> Image.Image | None:
     """从 Agent 的消息历史里找到最近一张图片（当前轮）。
@@ -105,7 +119,7 @@ def identify_calligrapher(state: Annotated[dict, InjectedState]) -> dict:
         "all_probabilities": result["all_probabilities"],
         "model_backbone": result["model_backbone"],
         "ensemble": result.get("ensemble"),
-        "evidence": result.get("evidence", {}),
+        "evidence": _text_evidence(result.get("evidence", {})),
         "inversion": inversion,
     }
 
@@ -170,7 +184,7 @@ def analyze_calligraphy(state: Annotated[dict, InjectedState]) -> dict:
         "reliability": reliability,
         "model_backbone": result["model_backbone"],
         "ensemble": result.get("ensemble"),
-        "evidence": result.get("evidence", {}),
+        "evidence": _text_evidence(result.get("evidence", {})),
         "inversion": inversion,
     }
 
@@ -341,3 +355,20 @@ def analyze_multi_char(state: Annotated[dict, InjectedState]) -> dict:
         "inversion": inversion,
         "note": "；".join(notes),
     }
+
+
+# 工具 5：导出对话为 PDF（意图标记工具）
+@tool
+def export_pdf(state: Annotated[dict, InjectedState]) -> str:
+    """将当前对话内容导出为 PDF 报告并自动下载。
+
+    当用户要求"导出 PDF"、"生成报告"、"把对话保存为 PDF / 文件"、
+    "把刚才的讨论整理成文档"等时调用本工具。
+
+    本工具只负责确认导出意图：PDF 文件由前端根据对话记录生成并自动下载，
+    不需要也不应返回文件内容或二进制数据。
+
+    Returns:
+        面向用户的导出确认信息。
+    """
+    return "好的，正在为您把当前对话记录导出为 PDF，文件生成后会自动下载。"

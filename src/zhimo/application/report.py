@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -102,9 +103,9 @@ class _ReportLayout:
             self.draw.text((x - left, self.y - top), line, font=font, fill=fill)
             self.y += line_height
 
-    def heading(self, title: str, font, *, keep_with=0, gap=9):
+    def heading(self, title: str, font, *, keep_with=0, gap=9, fill=(20, 45, 90)):
         self.ensure_space(_line_height(title, font) + gap + keep_with)
-        self.text(title, font, fill=(20, 45, 90))
+        self.text(title, font, fill=fill)
         self.y += gap
 
     def image_pair(self, original, processed, heading_font, small_font):
@@ -171,20 +172,33 @@ def build_pdf_report(
     if quality:
         layout.text("图像质量：" + json.dumps(quality, ensure_ascii=False), small_font)
 
-    heatmap = (recognition.get("evidence") or {}).get("heatmap")
-    if heatmap:
-        try:
-            if isinstance(heatmap, str):
-                heatmap = base64.b64decode(heatmap.split(",", 1)[1] if heatmap.startswith("data:") else heatmap)
-            with Image.open(BytesIO(heatmap)) as heat:
-                heat_image = _fit_image(heat, 700, 430)
-        except Exception:
-            heat_image = None
-        if heat_image is not None:
-            layout.y += 18
-            layout.heading("Grad-CAM 关注区域", heading_font, keep_with=450)
-            layout.page.paste(heat_image, (70, layout.y))
-            layout.y += 450
+    # 识别关注字：从处理后图像按切分框裁出投票靠前的单字图，作为识别依据展示。
+    # 替代原 Grad-CAM 热力图——热力图有时关注背景，展示出来反而削弱可解释性。
+    per_char = recognition.get("per_char_results") or []
+    if has_image and per_char and processed is not None:
+        top_chars = sorted(
+            per_char,
+            key=lambda item: float(item.get("confidence") or 0),
+            reverse=True,
+        )[:3]
+        layout.heading("识别关注字", heading_font, keep_with=840)
+        for item in top_chars:
+            bbox = item.get("bbox")
+            if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+                continue
+            x, y, w, h = (int(v) for v in bbox)
+            try:
+                crop = processed.crop((x, y, x + w, y + h))
+            except Exception:
+                continue
+            layout.ensure_space(280)
+            layout.page.paste(_fit_image(crop, 300, 250), (70, layout.y))
+            layout.draw.text(
+                (70, layout.y + 258),
+                f"{item.get('name', '-')}（{float(item.get('confidence') or 0):.3f}）",
+                font=small_font, fill=(60, 66, 82),
+            )
+            layout.y += 280
 
     knowledge = result.get("knowledge")
     if knowledge:
@@ -204,6 +218,73 @@ def build_pdf_report(
                 image, str(example.get("title") or "作品示例"),
                 str(example.get("source_url") or ""), body_font, small_font,
             )
+
+    output = BytesIO()
+    layout.pages[0].save(output, format="PDF", save_all=True, append_images=layout.pages[1:], resolution=150)
+    return output.getvalue()
+
+
+def build_chat_pdf(entries: list[dict[str, Any]]) -> bytes:
+    """Build a conversation-record PDF from chat entries.
+
+    由前端导出对话时调用：前端负责剥离 markdown 并把图片压缩为
+    base64 data URL（<=600px），这里只负责确定性渲染，不做任何生成式处理。
+
+    Each entry:
+        {"role": "user" | "ai",
+         "text": str,                       # 纯文本（前端已剥离 markdown 标记）
+         "image": str | None,               # 可选 base64 data URL（用户消息的图）
+         "recognition": {"calligrapher": str, "confidence": float} | None}
+    """
+    title_font = _font(42)
+    heading_font = _font(24)
+    body_font = _font(21)
+    small_font = _font(16)
+    layout = _ReportLayout()
+
+    layout.text("智墨 · 书法鉴赏对话记录", title_font, fill=(20, 45, 90))
+    layout.y += 12
+    layout.text(
+        f"导出时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        small_font, fill=(80, 90, 105),
+    )
+    layout.y += 24
+
+    user_fill = (60, 66, 82)
+    ai_fill = (176, 58, 46)
+
+    for index, entry in enumerate(entries, start=1):
+        role = entry.get("role")
+        text = str(entry.get("text") or "").strip()
+        if role == "user":
+            layout.y += 10
+            layout.heading(f"用户  ·  第 {index} 条", heading_font, gap=8, fill=user_fill)
+            image = entry.get("image")
+            if image:
+                try:
+                    raw = image.split(",", 1)[1] if image.startswith("data:") else image
+                    with Image.open(BytesIO(base64.b64decode(raw))) as source:
+                        pic = _fit_image(source.convert("RGB"), 600, 400)
+                except Exception:
+                    pic = None
+                if pic is not None:
+                    layout.ensure_space(410)
+                    layout.page.paste(pic, (70, layout.y))
+                    layout.y += 410
+            if text:
+                layout.text(text, body_font, fill=user_fill)
+        else:
+            layout.y += 10
+            layout.heading(f"智墨 AI  ·  第 {index} 条", heading_font, gap=8, fill=ai_fill)
+            if text:
+                layout.text(text, body_font, fill=ai_fill)
+            recognition = entry.get("recognition") or {}
+            if recognition.get("calligrapher"):
+                layout.text(
+                    f"识别结果：{recognition['calligrapher']} · 置信度 {recognition.get('confidence', '-')}",
+                    small_font, fill=(20, 45, 90),
+                )
+            layout.y += 14
 
     output = BytesIO()
     layout.pages[0].save(output, format="PDF", save_all=True, append_images=layout.pages[1:], resolution=150)

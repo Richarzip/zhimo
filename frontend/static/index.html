@@ -80,8 +80,8 @@
           <span>知识检索</span>
           <input id="ragToggle" type="checkbox" checked />
         </label>
-        <label class="switch-row" data-tip="可视化模型关注的笔画区域，展示识别依据">
-          <span>Grad-CAM 热力图</span>
+        <label class="switch-row" data-tip="生成模型关注区域的文字说明，供 AI 鉴赏时引用">
+          <span>注意力分析（供 AI 参考）</span>
           <input id="camToggle" type="checkbox" checked />
         </label>
         <label class="switch-row" data-tip="多角度测试增强识别稳定性，结果更可靠">
@@ -123,11 +123,6 @@
       <div class="chat-list" id="chatList">
         <div class="chat-empty" id="chatEmpty">上传书法图片或输入问题，与鉴赏 Agent 多轮对话。Agent 能记住同一会话中的上下文。</div>
       </div>
-
-      <details class="step-box">
-        <summary>本轮 Agent 过程</summary>
-        <ol class="timeline" id="timeline"></ol>
-      </details>
     </section>
 
     <section class="panel result-panel">
@@ -135,8 +130,6 @@
         <h2>结果</h2>
         <span class="muted" id="resultMode">未运行</span>
       </div>
-
-      <div class="summary" id="summary">上传图片后开始分析。即使缺少权重，本页面也会展示流程已执行到模型推理入口。</div>
 
       <div class="diagnostic hidden" id="diagnostic"></div>
 
@@ -167,10 +160,6 @@
       </div>
 
       <div class="visual-grid">
-        <figure class="visual hidden" id="camFigure">
-          <figcaption>Grad-CAM 热力图</figcaption>
-          <img id="camImage" alt="Grad-CAM" />
-        </figure>
         <figure class="visual hidden" id="segFigure">
           <figcaption>多字切分结果</figcaption>
           <img id="segImage" alt="切分结果" />
@@ -186,6 +175,11 @@
       <div class="report-actions hidden" id="reportActions">
         <button class="secondary" id="downloadPdfBtn" type="button">Download PDF report</button>
       </div>
+
+      <details class="step-box">
+        <summary>本轮 Agent 过程</summary>
+        <ol class="timeline" id="timeline"></ol>
+      </details>
 
       <details class="raw-box">
         <summary>原始 JSON</summary>

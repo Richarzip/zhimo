@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
 import os
 import shutil
@@ -316,7 +317,18 @@ def run_multi(
     )
 
 async def index(_: web.Request) -> web.FileResponse:
-    return web.FileResponse(STATIC_DIR / "index.html")
+    resp = web.FileResponse(STATIC_DIR / "index.html")
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
+
+
+@web.middleware
+async def no_cache_static(request: web.Request, handler) -> web.StreamResponse:
+    """静态资源不缓存：开发期频繁改动 HTML/JS/CSS，避免浏览器加载旧版本。"""
+    response = await handler(request)
+    if request.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return response
 
 
 async def health(_: web.Request) -> web.Response:
@@ -564,12 +576,52 @@ async def analyze(request: web.Request) -> web.Response:
             worker.release()
 
 
+MAX_EXPORT_ENTRIES = 200
+
+
+async def export_chat(request: web.Request) -> web.Response:
+    """导出对话记录为 PDF（由前端按钮或 Agent 的 export_pdf 工具触发）。
+
+    请求体为 JSON：{"entries": [{"role", "text", "image"(可选 base64), "recognition"(可选)}]}
+    前端负责剥离 markdown、压缩图片；本接口只做确定性渲染，返回 pdf data_url。
+    """
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001
+        return json_response({"error": "bad_json", "message": "请求体必须是 JSON。"}, status=400)
+
+    entries = payload.get("entries") if isinstance(payload, dict) else None
+    if not isinstance(entries, list) or not entries:
+        return json_response({"error": "empty_entries", "message": "没有可导出的对话内容。"}, status=400)
+    if len(entries) > MAX_EXPORT_ENTRIES:
+        return json_response({"error": "too_many_entries", "message": f"对话条目过多（超过 {MAX_EXPORT_ENTRIES} 条）。"}, status=400)
+
+    from zhimo.application.report import build_chat_pdf
+    try:
+        pdf = build_chat_pdf(entries)
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return json_response(
+            {"error": "pdf_failed", "message": f"PDF 生成失败：{type(exc).__name__}。", "diagnostic": classify_exception(exc)},
+            status=500,
+        )
+
+    data_url = f"data:application/pdf;base64,{base64.b64encode(pdf).decode('ascii')}"
+    return json_response({
+        "pdf": {
+            "filename": f"zhimo_chat_{time.strftime('%Y%m%d_%H%M%S')}.pdf",
+            "data_url": data_url,
+        }
+    })
+
+
 def create_app() -> web.Application:
-    app = web.Application(client_max_size=MAX_REQUEST_BYTES)
+    app = web.Application(client_max_size=MAX_REQUEST_BYTES, middlewares=[no_cache_static])
     app.cleanup_ctx.append(analysis_worker_context)
     app.router.add_get("/", index)
     app.router.add_get("/api/health", health)
     app.router.add_post("/api/analyze", analyze)
+    app.router.add_post("/api/export", export_chat)
     app.router.add_static("/static/", STATIC_DIR, show_index=False)
     return app
 

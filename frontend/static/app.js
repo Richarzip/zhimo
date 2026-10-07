@@ -8,6 +8,7 @@ const state = {
   controller: null,
   analyzing: false,
   validating: false,
+  exporting: false,
   exportPdf: false,
   sessionId: newSessionId(),
   messages: [], // 对话记录 [{role, text, previewUrl, loading, data}]
@@ -166,12 +167,10 @@ async function setFile(file) {
     $('preview').src = url;
     $('previewWrap').classList.remove('hidden');
     $('runState').textContent = '等待分析';
-    $('summary').textContent = '图片已就绪，点击开始分析。';
   } catch (err) {
     if (version !== state.fileVersion) return;
     showUploadError(err.message);
     $('runState').textContent = '等待输入';
-    $('summary').textContent = '请重新选择有效图片。';
   } finally {
     releasePreviewUrl(url);
     if (version === state.fileVersion) {
@@ -211,7 +210,8 @@ async function analyze() {
   state.analyzing = true;
   updateAnalyzeButton();
   $('runState').textContent = '运行中';
-  clearResult('正在等待回复...');
+  // 结果栏保留上一轮最新非空数据，等待响应后由 renderResult 决定是否刷新；
+  // 仅本轮 Agent 过程时间线立即更新为“发送中”。
   renderTimeline([{ name: 'request', status: 'running', detail: '正在发送消息到本地服务' }]);
 
   // 用户消息入对话流 + AI loading 占位
@@ -233,7 +233,11 @@ async function analyze() {
     form.append('pdf', String(state.exportPdf));
     form.append('prompt', text);
 
-    const res = await fetch('/api/analyze', { method: 'POST', body: form, signal: controller.signal });
+    const fetchPromise = fetch('/api/analyze', { method: 'POST', body: form, signal: controller.signal });
+    // 文本与图片均已随请求发出：立即清空输入栏，不等推理结束
+    clearFile();
+    $('prompt').value = '';
+    const res = await fetchPromise;
     let data;
     try {
       data = await res.json();
@@ -251,10 +255,13 @@ async function analyze() {
       $('runState').textContent = '失败';
       return;
     }
-    // 对话回复 + 右侧最新结果区（chat 返回无 summary，用 AI 回复代替）
-    data.summary = data.reply || data.summary;
+    // 对话回复 + 右侧最新结果区（识别相关摘要由 renderResult 处理）
     completeAiMessage(requestId, { text: data.reply || '', data });
     renderResult(data);
+    // Agent 调用了 export_pdf 工具 → 自动导出当前对话为 PDF
+    if (data.steps?.some((step) => step.name === 'export_pdf')) {
+      exportConversationPdf();
+    }
     // 导出模式：拿到 PDF 后自动触发下载
     if (state.exportPdf && data.pdf?.data_url) {
       const link = document.createElement('a');
@@ -288,24 +295,21 @@ async function analyze() {
   }
 }
 
-function clearResult(summary = '上传图片后开始分析。') {
+function clearResult() {
   setText('calligrapher', '-');
   setText('confidence', '-');
   setText('reliability', '-');
-  $('summary').textContent = summary;
   $('resultMode').textContent = '未运行';
   $('diagnostic').classList.add('hidden');
   $('diagnostic').innerHTML = '';
   $('qualityGrid').innerHTML = '';
   $('rankList').innerHTML = '';
-  $('camFigure').classList.add('hidden');
   $('segFigure').classList.add('hidden');
   $('referenceBox').classList.add('hidden');
   $('referenceGrid').innerHTML = '';
   $('referenceNote').textContent = '';
   $('reportActions').classList.add('hidden');
   $('downloadPdfBtn').onclick = null;
-  $('camImage').removeAttribute('src');
   $('segImage').removeAttribute('src');
   $('rawJson').textContent = '{}';
 }
@@ -376,10 +380,6 @@ function chatCardsHtml(data) {
   }
   const parts = [];
   if (cards.length) parts.push(`<div class="chat-cards">${cards.join('')}</div>`);
-  if (rec.evidence?.heatmap) {
-    const src = rec.evidence.heatmap.startsWith('data:') ? rec.evidence.heatmap : `data:image/png;base64,${rec.evidence.heatmap}`;
-    parts.push(`<figure class="chat-visual"><figcaption>Grad-CAM 热力图</figcaption><img src="${src}" alt="Grad-CAM 热力图"></figure>`);
-  }
   if (data.inversion?.was_inverted) {
     parts.push('<div class="chat-note">检测到黑底白字拓印，已自动反转为白底黑字后再识别。</div>');
   }
@@ -418,11 +418,20 @@ function resetChat() {
 }
 
 function renderResult(data) {
-  clearResult();
+  // 只有本轮真正携带识别/分析产物时才刷新结果区；
+  // 纯对话或错误轮次保持上一轮的最新非空数据，避免结果栏被清空。
+  // 注意用非空判断：后端可能返回空对象 {}，存在性判断会误判为“有结果”。
+  const hasRecognition = Boolean(
+    (data.recognition && Object.keys(data.recognition).length > 0) ||
+    (data.quality && Object.keys(data.quality).length > 0) ||
+    (data.segmentation && data.segmentation.overlay) ||
+    (data.pdf && data.pdf.data_url)
+  );
+  if (hasRecognition) clearResult();
+
   renderTimeline(data.steps || []);
   $('rawJson').textContent = JSON.stringify(data, null, 2);
   $('resultMode').textContent = data.mode === 'multi' ? '多字作品' : data.mode === 'single' ? '单字' : data.mode === 'chat' ? '对话' : '异常';
-  $('summary').textContent = data.summary || data.diagnostic?.message || data.message || '没有返回摘要。';
 
   const diagnostic = data.diagnostic || data.knowledge_diagnostic;
   if (diagnostic) {
@@ -432,7 +441,14 @@ function renderResult(data) {
       <span>${escapeHtml(diagnostic.suggestion || '')}</span>
       ${diagnostic.raw ? `<pre>${escapeHtml(diagnostic.raw)}</pre>` : ''}
     `;
+  } else if (hasRecognition) {
+    // 有识别数据但无诊断：清掉上一轮残留诊断（原 clearResult 行为）
+    $('diagnostic').classList.add('hidden');
+    $('diagnostic').innerHTML = '';
   }
+
+  // 纯对话/错误轮次：识别区保持上一轮数据，不再刷新
+  if (!hasRecognition) return;
 
   const rec = data.recognition || {};
   setText('calligrapher', rec.calligrapher || '-');
@@ -441,11 +457,6 @@ function renderResult(data) {
   renderQuality(data.quality || {});
   renderRanks(rec);
 
-  const heatmap = rec.evidence?.heatmap;
-  if (heatmap) {
-    $('camImage').src = heatmap.startsWith('data:') ? heatmap : `data:image/png;base64,${heatmap}`;
-    $('camFigure').classList.remove('hidden');
-  }
   if (data.segmentation?.overlay) {
     $('segImage').src = data.segmentation.overlay;
     $('segFigure').classList.remove('hidden');
@@ -590,20 +601,114 @@ function setupResultToggle() {
 
 setupResultToggle();
 
-// ===== 导出 PDF（独立功能）=====
-function exportPdf() {
-  if (state.analyzing || state.validating) return;
-  if (!state.file) {
-    $('summary').textContent = '请先上传图片，再导出 PDF。';
+// ===== 导出对话为 PDF =====
+
+// markdown 回复 → 纯文本（剥离 **、#、列表等标记，避免画进 PDF）
+function markdownToPlain(text) {
+  if (!text) return '';
+  try {
+    const html = window.markdownit({ html: false, linkify: false }).render(String(text));
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    return (div.textContent || '').replace(/\s+/g, ' ').trim();
+  } catch {
+    return String(text).replace(/[*#`>\[\]()!-]/g, '').trim();
+  }
+}
+
+// 对话里的图片（blob URL）→ 压缩为 <=maxSide 的 JPEG data URL，避免请求体过大
+function imageToDataUrl(url, maxSide = 600) {
+  return fetch(url)
+    .then((response) => response.blob())
+    .then((blob) => {
+      if (typeof createImageBitmap === 'function') {
+        return createImageBitmap(blob).then((bmp) => {
+          const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(bmp.width * scale));
+          canvas.height = Math.max(1, Math.round(bmp.height * scale));
+          canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+          bmp.close();
+          return canvas.toDataURL('image/jpeg', 0.85);
+        });
+      }
+      const img = new Image();
+      img.src = url;
+      return new Promise((resolve, reject) => {
+        img.onload = () => {
+          const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(img.width * scale));
+          canvas.height = Math.max(1, Math.round(img.height * scale));
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/jpeg', 0.85));
+        };
+        img.onerror = reject;
+      });
+    });
+}
+
+function extractRecognition(data) {
+  const recognition = data?.recognition;
+  if (!recognition || !recognition.calligrapher) return null;
+  return { calligrapher: recognition.calligrapher, confidence: recognition.confidence };
+}
+
+async function exportConversationPdf() {
+  if (state.exporting) return;
+  const messages = state.messages;
+  if (!messages.length) {
+    alert('暂无可导出的对话内容。');
     return;
   }
-  state.exportPdf = true;
-  $('exportPdfBtn').textContent = '导出中...';
-  analyze();
+  state.exporting = true;
+  const btn = $('exportPdfBtn');
+  if (btn) btn.textContent = '导出中...';
+  try {
+    const entries = [];
+    for (const message of messages) {
+      if (message.role === 'user') {
+        let image = null;
+        if (message.previewUrl) {
+          try { image = await imageToDataUrl(message.previewUrl); } catch { image = null; }
+        }
+        entries.push({ role: 'user', text: message.text || '', image });
+      } else if (!message.loading) {
+        entries.push({
+          role: 'ai',
+          text: markdownToPlain(message.text || ''),
+          recognition: extractRecognition(message.data),
+        });
+      }
+    }
+    if (!entries.length) {
+      alert('暂无可导出的对话内容。');
+      return;
+    }
+    const response = await fetch('/api/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.pdf?.data_url) {
+      alert(data.message || `导出失败（HTTP ${response.status}）。`);
+      return;
+    }
+    const link = document.createElement('a');
+    link.href = data.pdf.data_url;
+    link.download = data.pdf.filename || 'zhimo_chat.pdf';
+    link.click();
+  } catch (err) {
+    alert(`导出失败：${err.message || err}`);
+  } finally {
+    state.exporting = false;
+    if (btn) btn.textContent = '导出为PDF';
+  }
 }
 
 const exportPdfBtn = $('exportPdfBtn');
-if (exportPdfBtn) exportPdfBtn.addEventListener('click', exportPdf);
+if (exportPdfBtn) exportPdfBtn.addEventListener('click', exportConversationPdf);
 
 // ===== 欢迎页进入逻辑 =====
 function enterApp() {

@@ -605,19 +605,12 @@ dd { margin-left: 112px; font-size: 12px; word-break: break-all; }
 }
 .step-box summary {
   cursor: pointer;
-  color: var(--muted);
+  color: var(--text);
   font-weight: 700;
-  font-size: 13px;
+  font-size: 15px;
 }
 .step-box .timeline { margin-top: 10px; }
 
-.summary {
-  padding: 14px;
-  border-radius: 12px;
-  background: var(--blue-soft);
-  border: 1px solid #cfe2ff;
-  line-height: 1.7;
-}
 .diagnostic {
   margin-top: 12px;
   padding: 14px;
@@ -668,7 +661,7 @@ dd { margin-left: 112px; font-size: 12px; word-break: break-all; }
 .reference-item a { color: var(--blue); text-decoration: none; }
 .report-actions { margin-top: 16px; }
 .raw-box { margin-top: 16px; }
-.raw-box summary { cursor: pointer; color: var(--muted); font-weight: 700; }
+.raw-box summary { cursor: pointer; color: var(--muted); font-weight: 700; font-size: 12px; }
 pre {
   white-space: pre-wrap;
   word-break: break-word;
