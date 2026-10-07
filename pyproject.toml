@@ -7,6 +7,7 @@ name = "zhimo"
 version = "0.2.0"
 description = "Chinese calligraphy recognition and analysis application"
 requires-python = ">=3.10"
+dependencies = ["reportlab>=4.0"]
 
 [project.optional-dependencies]
 train = [

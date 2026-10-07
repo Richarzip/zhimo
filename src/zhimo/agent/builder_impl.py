@@ -84,7 +84,7 @@ def request_prompt(request) -> str:
     }.get(mode, "根据图片选择分析工具。")
     rag_rule = ("RAG 已开启，按需检索知识库。" if options.get("rag", True) else
                 "RAG 已关闭，不调用 search_knowledge，不声称本轮检索过知识库；证据不足的风格信息请明确说明。")
-    cam_rule = ("CAM 已开启，单字分析可使用工具返回的热力图证据。" if options.get("cam", True) else
+    cam_rule = ("CAM 已开启，单字分析可使用工具返回的热力图证据。" if options.get("cam", False) else
                 "CAM 已关闭，不声称本轮生成了热力图，不根据缺失的 attention_note 推断关注区域。")
     return SYSTEM_PROMPT + "\n【本轮选项，优先于通用工作流程】\n" + "\n".join((mode_rule, rag_rule, cam_rule))
 

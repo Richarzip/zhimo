@@ -83,7 +83,7 @@ class ChatPipelineTests(unittest.TestCase):
         expected = [
             {"rag": False, "cam": False, "tta": True, "analysis_mode": "multi"},
             {"rag": True, "cam": True, "tta": False, "analysis_mode": "single"},
-            {"rag": True, "cam": True, "tta": False, "analysis_mode": "auto"},
+            {"rag": True, "cam": False, "tta": False, "analysis_mode": "auto"},
         ]
         for fields, options in zip(selections, expected):
             self.run_chat(text="重新分析", **fields)

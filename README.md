@@ -71,9 +71,20 @@ python apps/web/server.py --host 127.0.0.1 --port 8766
 GET  /              网页
 GET  /api/health    运行状态、权重和知识库检查
 POST /api/analyze   单字、多字或对话分析
+POST /api/export    根据最近一次图片鉴别结果生成 PDF 报告
 ```
 
-上传限制：单张图片最大 `32 MB`，最大 `25,000,000` 像素，支持 JPEG、PNG、WEBP、BMP 和 GIF。
+网页的运行环境面板只展示权重、Chroma 和 Python 状态，不再展示本地样例图文件名；`/api/health` 中保留的样例图字段主要供回归测试和调试使用。
+
+上传限制：单张图片最大 `32 MB`，最大 `25,000,000` 像素，支持 JPEG、PNG、WEBP、BMP 和 GIF。`/api/export` 需要上传图片和已有分析结果，服务端会校验图片大小和格式；该接口不会重新运行识别。
+
+### PDF 报告
+
+PDF 由 `src/zhimo/application/report.py` 使用 ReportLab 排版和分页，Pillow 负责图片解码与格式转换。生成单次鉴别报告需要 ReportLab（`requirements.txt` 与包运行依赖均已声明），不需要额外安装字体：程序优先使用常见系统中文字体，找不到时回退到 ReportLab 的 `STSong-Light` CID 字体映射。报告包含鉴别摘要和模型结果；有图像时还会呈现上传图、模型输入图、质量指标，以及可用的 Grad-CAM、知识依据和已审核作品。报告中的图片仅为版面缩略图，不会改变识别输入。
+
+前端“输出鉴别报告”选项会让 `/api/analyze` 在当前分析响应中附带 PDF 并自动下载。对话区“导出为PDF”则选择最近一次已完成的带图分析，将图片和已有结果提交给 `/api/export` 重新排版；它不是整段聊天记录导出，也不会重新识别，因此该路径中的原图和处理图使用同一张图片。普通分析不开启 PDF 时不会生成报告。
+
+报告会清理常见 Markdown 标记，将标题、列表、引用、链接、强调和表格转为可读文本。PDF 文本在 ReportLab 中按段落流式布局，可自动换页；超长质量指标会拆分成可分页的表格行。中文字体是否可嵌入以及字形外观仍取决于运行环境。模型输出只是辅助分析，不构成艺术史鉴定结论。
 
 ## 项目结构
 
@@ -231,7 +242,9 @@ ollama serve
 python -m zhimo.knowledge.chroma
 ```
 
-RAG 不可用时，普通图像识别仍可运行；Web 和 Agent 会返回结构化诊断。
+网页中的“知识检索”开关默认关闭。这样在 Ollama 尚未启动、`bge-m3` 尚未下载或 Chroma 尚未初始化时，普通网页识别不会默认等待知识库；需要风格背景和作品信息时可以在页面中手动打开该开关。RAG 不可用时，普通图像识别仍可运行；Web 和 Agent 会返回结构化诊断。
+
+这里的默认值分为两层：网页前端会显式提交 `rag=false`，而直接调用 `/api/analyze` 时如果省略 `rag`，服务端仍按当前接口默认值 `true` 处理。需要稳定跳过检索的 HTTP 调用应显式传入 `rag=false`。
 
 ## 训练和评估
 
@@ -289,6 +302,12 @@ python -B -m unittest discover -s frontend/tests -p "test_*.py" -v
 node --test frontend/tests/test_app.cjs
 ```
 
+PDF 分页和 Markdown 清理的专项回归测试：
+
+```powershell
+python -B -m unittest tests.unit.test_report_pagination -v
+```
+
 测试会替换模型和知识库依赖，不需要模型权重、运行中的 Ollama 或真实 API key。真实全流程测试才需要这些外部服务。
 
 ## 主要配置项
@@ -322,8 +341,10 @@ $env:PYTHONPATH = "$PWD\src;$PWD"
 
 ### `predict_with_cam` 缺少依赖
 
+完整安装 `requirements.txt` 时会自动安装固定版本 `grad-cam==1.5.7`。如果使用了旧环境、只安装了部分依赖，或环境同步后仍提示缺少模块，再执行：
+
 ```powershell
-python -m pip install grad-cam
+python -m pip install grad-cam==1.5.7
 ```
 
 普通识别不依赖 Grad-CAM。
