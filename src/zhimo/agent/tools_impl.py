@@ -98,7 +98,7 @@ def identify_calligrapher(state: Annotated[dict, InjectedState]) -> dict:
     if image is None:
         return {"error": "没有找到图片，请上传书法作品"}
 
-    # 反色预处理（处理拓印）：黑底白字 → 白底黑字
+    # 反色预处理（处理拓印）：黑底白字 -> 白底黑字
     image, inversion = detect_and_fix_inversion(image)
 
     recognizer = get_recognizer()
@@ -371,4 +371,4 @@ def export_pdf(state: Annotated[dict, InjectedState]) -> str:
     Returns:
         面向用户的导出确认信息。
     """
-    return "好的，正在为您把当前对话记录导出为 PDF，文件生成后会自动下载。"
+    return "好的，正在为您把当前对话记录导出为 PDF，文件生成后会自动下载。若未自动下载，可点击“导出为PDF”按钮强制导出。"
