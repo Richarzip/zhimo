@@ -172,7 +172,7 @@ def run_chat(
         # from a previous request or a different checkbox selection.
         options = {
             "rag": fields.get("rag", "true") == "true",
-            "cam": fields.get("cam", "true") == "true",
+            "cam": fields.get("cam", "false") == "true",
             "tta": fields.get("tta", "false") == "true",
             "analysis_mode": fields.get("analysis_mode", "auto"),
         }

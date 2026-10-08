@@ -463,7 +463,7 @@ def analyze_image(image_bytes: bytes | None, fields: dict[str, str]) -> dict[str
     with decode_image(image_bytes) as image:
         mode = fields.get("mode", "single")
         use_tta = fields.get("tta", "false") == "true"
-        use_cam = fields.get("cam", "true") == "true"
+        use_cam = fields.get("cam", "false") == "true"
         use_rag = fields.get("rag", "true") == "true"
         use_denoise = fields.get("denoise", "true") == "true"
         use_examples = fields.get("examples", "false") == "true"
@@ -579,7 +579,7 @@ async def analyze(request: web.Request) -> web.Response:
 MAX_EXPORT_ENTRIES = 200
 
 
-async def export_chat(request: web.Request) -> web.Response:
+async def legacy_export_chat(request: web.Request) -> web.Response:
     """导出对话记录为 PDF（由前端按钮或 Agent 的 export_pdf 工具触发）。
 
     请求体为 JSON：{"entries": [{"role", "text", "image"(可选 base64), "recognition"(可选)}]}
@@ -610,6 +610,45 @@ async def export_chat(request: web.Request) -> web.Response:
     return json_response({
         "pdf": {
             "filename": f"zhimo_chat_{time.strftime('%Y%m%d_%H%M%S')}.pdf",
+            "data_url": data_url,
+        }
+    })
+
+
+async def export_chat(request: web.Request) -> web.Response:
+    """Generate an identification report for one image and one result."""
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001
+        return json_response({"error": "bad_json", "message": "Invalid JSON body."}, status=400)
+
+    image_data = payload.get("image") if isinstance(payload, dict) else None
+    result = payload.get("result") if isinstance(payload, dict) else None
+    if not isinstance(image_data, str) or not image_data:
+        return json_response({"error": "missing_image", "message": "No image report can be exported."}, status=400)
+    if not isinstance(result, dict):
+        return json_response({"error": "missing_result", "message": "No identification result can be exported."}, status=400)
+
+    try:
+        raw = image_data.split(",", 1)[1] if image_data.startswith("data:") else image_data
+        image_bytes = base64.b64decode(raw, validate=True)
+        if len(image_bytes) > MAX_IMAGE_BYTES:
+            raise ValueError("image too large")
+        with decode_image(image_bytes) as source:
+            image = source.convert("RGB")
+            from zhimo.application.report import build_pdf_report
+            pdf = build_pdf_report(image, image, result)
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return json_response(
+            {"error": "pdf_failed", "message": f"Report generation failed: {type(exc).__name__}", "diagnostic": classify_exception(exc)},
+            status=400 if isinstance(exc, (ValueError, UploadError)) else 500,
+        )
+
+    data_url = f"data:application/pdf;base64,{base64.b64encode(pdf).decode('ascii')}"
+    return json_response({
+        "pdf": {
+            "filename": f"zhimo_report_{time.strftime('%Y%m%d_%H%M%S')}.pdf",
             "data_url": data_url,
         }
     })

@@ -52,7 +52,6 @@ async function loadHealth() {
       <dt>权重路径</dt><dd>${modelPaths}</dd>
       <dt>Chroma</dt><dd>${formatBool(data.chroma_db_exists)}</dd>
       <dt>Python</dt><dd>${escapeHtml(data.python)}</dd>
-      <dt>样例图</dt><dd>${escapeHtml((data.sample_images || []).join(', ') || '-')}</dd>
     `;
   } catch (err) {
     $('serverStatus').textContent = '服务异常';
@@ -111,6 +110,14 @@ function clearFile() {
   const previousUrl = state.previewUrl;
   state.previewUrl = null;
   releasePreviewUrl(previousUrl);
+  updatePdfToggle();
+}
+
+function updatePdfToggle() {
+  const toggle = $('pdfToggle');
+  if (!toggle) return;
+  toggle.disabled = !state.file;
+  if (!state.file) toggle.checked = false;
 }
 
 function releasePreviewUrl(url) {
@@ -163,6 +170,7 @@ async function setFile(file) {
     await checkImage(url);
     if (version !== state.fileVersion) return;
     state.file = file;
+    updatePdfToggle();
     state.previewUrl = url;
     $('preview').src = url;
     $('previewWrap').classList.remove('hidden');
@@ -230,7 +238,8 @@ async function analyze() {
     form.append('tta', String($('ttaToggle').checked));
     form.append('denoise', String($('denoiseToggle').checked));
     form.append('examples', String($('examplesToggle').checked));
-    form.append('pdf', String(state.exportPdf));
+    const autoExportPdf = Boolean(state.file && $('pdfToggle')?.checked);
+    form.append('pdf', String(autoExportPdf));
     form.append('prompt', text);
 
     const fetchPromise = fetch('/api/analyze', { method: 'POST', body: form, signal: controller.signal });
@@ -258,12 +267,8 @@ async function analyze() {
     // 对话回复 + 右侧最新结果区（识别相关摘要由 renderResult 处理）
     completeAiMessage(requestId, { text: data.reply || '', data });
     renderResult(data);
-    // Agent 调用了 export_pdf 工具 → 自动导出当前对话为 PDF
-    if (data.steps?.some((step) => step.name === 'export_pdf')) {
-      exportConversationPdf();
-    }
     // 导出模式：拿到 PDF 后自动触发下载
-    if (state.exportPdf && data.pdf?.data_url) {
+    if (autoExportPdf && data.pdf?.data_url) {
       const link = document.createElement('a');
       link.href = data.pdf.data_url;
       link.download = data.pdf.filename || 'zhimo_report.pdf';
@@ -286,6 +291,11 @@ async function analyze() {
   } finally {
     if (requestId === state.requestId) {
       state.exportPdf = false;
+      const pdfToggle = $('pdfToggle');
+      if (pdfToggle) {
+        pdfToggle.checked = false;
+        pdfToggle.disabled = true;
+      }
       const pdfBtn = $('exportPdfBtn');
       if (pdfBtn) pdfBtn.textContent = '导出为PDF';
       state.controller = null;
@@ -657,38 +667,33 @@ function extractRecognition(data) {
 async function exportConversationPdf() {
   if (state.exporting) return;
   const messages = state.messages;
-  if (!messages.length) {
-    alert('暂无可导出的对话内容。');
+  let selected = null;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const user = messages[index];
+    if (user.role !== 'user' || !user.previewUrl) continue;
+    for (let next = index + 1; next < messages.length && messages[next].role !== 'user'; next += 1) {
+      const ai = messages[next];
+      if (ai.role === 'ai' && !ai.loading && ai.data) selected = { user, result: ai.data };
+    }
+    if (selected) break;
+  }
+  if (!selected) {
+    alert('没有找到已完成鉴别的图片。');
     return;
   }
   state.exporting = true;
   const btn = $('exportPdfBtn');
   if (btn) btn.textContent = '导出中...';
   try {
-    const entries = [];
-    for (const message of messages) {
-      if (message.role === 'user') {
-        let image = null;
-        if (message.previewUrl) {
-          try { image = await imageToDataUrl(message.previewUrl); } catch { image = null; }
-        }
-        entries.push({ role: 'user', text: message.text || '', image });
-      } else if (!message.loading) {
-        entries.push({
-          role: 'ai',
-          text: markdownToPlain(message.text || ''),
-          recognition: extractRecognition(message.data),
-        });
-      }
-    }
-    if (!entries.length) {
-      alert('暂无可导出的对话内容。');
+    let image;
+    try { image = await imageToDataUrl(selected.user.previewUrl, 1600); } catch {
+      alert('最近一张图片无法读取，请重新上传后再试。');
       return;
     }
     const response = await fetch('/api/export', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ entries }),
+      body: JSON.stringify({ image, result: selected.result }),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.pdf?.data_url) {
@@ -697,7 +702,7 @@ async function exportConversationPdf() {
     }
     const link = document.createElement('a');
     link.href = data.pdf.data_url;
-    link.download = data.pdf.filename || 'zhimo_chat.pdf';
+    link.download = data.pdf.filename || 'zhimo_report.pdf';
     link.click();
   } catch (err) {
     alert(`导出失败：${err.message || err}`);
@@ -731,4 +736,3 @@ function showWelcome() {
 
 const welcomeBtn = $('welcomeBtn');
 if (welcomeBtn) welcomeBtn.addEventListener('click', showWelcome);
-

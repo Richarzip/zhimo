@@ -20,6 +20,29 @@ Image.init()
 
 
 class ReportPaginationTests(unittest.TestCase):
+    def test_markdown_is_cleaned_for_report_text(self):
+        source = """# 结论
+
+**重点**：[来源](https://example.com)
+- 第一项
+1. 第二项
+> 引用内容
+```python
+print('hidden fence')
+```
+| 字段 | 值 |
+| --- | --- |
+| 风格 | 行书 |
+"""
+        cleaned = report.markdown_to_report_text(source)
+        self.assertEqual(
+            cleaned,
+            "结论\n\n重点：来源\n• 第一项\n• 第二项\n引用内容\nprint('hidden fence')\n字段    值\n风格    行书",
+        )
+        self.assertNotIn("**", cleaned)
+        self.assertNotIn("[来源]", cleaned)
+        self.assertNotIn("```", cleaned)
+
     def render(self, original, processed, result, *, examples=None):
         runs, pictures, pages = [], [], []
         original_text = ImageDraw.ImageDraw.text

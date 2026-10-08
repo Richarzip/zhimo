@@ -157,7 +157,7 @@ def analyze_calligraphy(state: Annotated[dict, InjectedState]) -> dict:
 
     # 开关由本轮状态注入；关闭 CAM 时不创建 GradCAM 或执行反向传播。
     recognizer = get_recognizer()
-    predict = recognizer.predict_with_cam if options.get("cam", True) else recognizer.recognize
+    predict = recognizer.predict_with_cam if options.get("cam", False) else recognizer.recognize
     result = predict(image, tta=options.get("tta", False))
 
     # 综合可信度
