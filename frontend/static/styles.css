@@ -692,10 +692,22 @@ pre {
   .result-panel { grid-column: 1 / -1; }
 }
 @media (max-width: 820px) {
-  .topbar { align-items: flex-start; flex-direction: column; padding: 20px; }
-  .layout { grid-template-columns: 1fr; grid-template-rows: repeat(3, minmax(0, 1fr)); padding: 12px; }
+  body { height: auto; overflow-y: auto; }
+  .topbar { align-items: flex-start; flex-direction: column; padding: 16px 16px 14px; gap: 12px; }
+  .topbar .head-actions { width: 100%; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+  .layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+    gap: 12px;
+    padding: 12px;
+    overflow: visible;
+  }
+  body.result-hidden .layout { grid-template-columns: 1fr; }
+  .panel { overflow: visible; }
   .cards, .two-col, .visual-grid { grid-template-columns: 1fr; }
   .reference-grid { grid-template-columns: 1fr; }
+  .welcome-card h1 { font-size: 28px; }
+  .chat-img { max-width: 140px; max-height: 140px; }
 }
 
 /* ============ 结果栏折叠 ============ */
