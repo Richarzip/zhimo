@@ -272,7 +272,7 @@ h3 { margin-bottom: 12px; font-size: 14px; }
   align-items: center;
   justify-content: center;
   background: url('/static/welcome-bg.png') center / cover no-repeat;
-  transition: opacity .45s ease, visibility .45s ease;
+  transition: opacity .7s ease, visibility .7s ease;
 }
 #welcome.hidden {
   display: flex !important; /* 覆盖全局 .hidden 的 display:none，保留布局才能做淡出过渡 */
@@ -398,6 +398,15 @@ textarea:focus { outline: 2px solid rgba(29, 99, 192, .18); border-color: var(--
   cursor: pointer;
   font-weight: 700;
 }
+#exportPdfBtn {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: #fff;
+}
+#exportPdfBtn:hover {
+  background: #96301f;
+  border-color: #96301f;
+}
 .env-box {
   padding: 14px;
   border-radius: 12px;
@@ -459,8 +468,8 @@ dd { margin-left: 112px; font-size: 12px; word-break: break-all; }
 .chat-msg.ai { justify-content: flex-start; }
 .chat-avatar {
   flex: none;
-  width: 36px;
-  height: 36px;
+  width: 38px;
+  height: 38px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -472,6 +481,11 @@ dd { margin-left: 112px; font-size: 12px; word-break: break-all; }
 .chat-avatar.ai {
   background: var(--blue);
   color: #fffdf7;
+}
+.chat-avatar.ai svg {
+  width: 36px;
+  height: 36px;
+  display: block;
 }
 .chat-bubble {
   max-width: 88%;
