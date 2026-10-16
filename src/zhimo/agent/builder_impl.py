@@ -1,5 +1,4 @@
-"""Agent 工厂：统一构建书法鉴赏 Agent，支持多轮对话（MemorySaver checkpointer）。
-
+"""
 agent.py 与 frontend/server.py 共用本模块，保证 system prompt 与工具集一致。
 """
 from typing import NotRequired

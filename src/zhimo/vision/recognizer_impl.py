@@ -1,7 +1,5 @@
 """
 Calligrapher Recognizer - 书法家分类推理端
-对应训练脚本: train.py（类别数按 CONFIG["author_map"]，当前 54 类）
-功能: 输入单张/批量书法图片 → 输出书法家名称、置信度、所有类别概率
 """
 
 import os

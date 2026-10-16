@@ -1,5 +1,3 @@
-"""Stable public interface for single-model recognition."""
-
 from .recognizer_impl import (
     CalligrapherRecognizer,
     DEFAULT_TRANSFORM,

@@ -1,10 +1,4 @@
-"""Deterministic, stroke-aware restoration of uploaded calligraphy images.
-
-Diagnostics are heuristics, not probabilities or authorship accuracy estimates.
-All processing is local and preserves the oriented dimensions and ink polarity.
-"""
 from __future__ import annotations
-
 from typing import Any
 
 import cv2
@@ -13,13 +7,7 @@ from PIL import Image, ImageOps
 
 from .preprocess_impl import detect_and_fix_inversion
 
-
 def _paper_field(gray: np.ndarray) -> np.ndarray:
-    """Estimate paper brightness using upper tile percentiles on a small preview.
-
-    Dense artwork and coloured paper can violate the sparse-ink assumption;
-    callers therefore bound the strength of background correction.
-    """
     h, w = gray.shape
     scale = min(1.0, 768 / max(h, w))
     preview = cv2.resize(gray, (max(1, round(w * scale)), max(1, round(h * scale))),
@@ -82,7 +70,6 @@ def _blend(original: np.ndarray, candidate: np.ndarray, amount: np.ndarray | flo
 
 
 def _basic(rgb: np.ndarray) -> np.ndarray:
-    """The previous fixed recipe, retained for reproducible comparisons."""
     bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
     median = cv2.medianBlur(bgr, 3)
     bilateral = cv2.bilateralFilter(median, d=5, sigmaColor=35, sigmaSpace=35)
@@ -92,13 +79,6 @@ def _basic(rgb: np.ndarray) -> np.ndarray:
 
 
 def denoise_image(image: Image.Image, *, mode: str = "adaptive") -> tuple[Image.Image, dict[str, Any]]:
-    """Return an RGB image and JSON-compatible diagnostics, without training.
-
-    Adaptive mode skips clean/ambiguous images and protects detected strokes.
-    Basic mode reproduces the former median/bilateral/CLAHE transformation.
-    Apply EXIF orientation once. Temporarily normalize reversed rubbings for
-    diagnosis and adaptive processing, restoring polarity for later detection.
-    """
     if mode not in {"adaptive", "basic"}:
         raise ValueError("denoise mode must be 'adaptive' or 'basic'")
     oriented = ImageOps.exif_transpose(image).convert("RGB")

@@ -1,15 +1,5 @@
 """
 Ensemble Recognizer - 多模型软投票集成推理端
-
-把 convnext.pth 与 swin.pth 两个权重做软投票（soft voting）集成：
-  1. 各自 forward 得到 softmax 概率
-  2. 对两个概率向量取平均
-  3. 取平均后概率最大的类别作为集成结果
-
-不训练、不微调，仅推理期集成。两个模型为同一训练任务的
-convnext_tiny（best_acc 0.8515）与 swin_tiny（best_acc 0.8481），
-类别顺序已验证完全一致，可直接按索引平均。
-
 用法：
     from zhimo.vision import EnsembleRecognizer
     rec = EnsembleRecognizer()
@@ -45,7 +35,6 @@ class EnsembleRecognizer:
         self.id_to_label = {}
         self.label_to_id = {}
 
-    # ---------- 模型加载 ----------
 
     def _load(self):
         """懒加载两个子模型，并校验类别对齐"""
@@ -83,7 +72,6 @@ class EnsembleRecognizer:
     def backbones(self):
         return [rec.backbone for rec in self._members]
 
-    # ---------- 内部工具 ----------
 
     @torch.no_grad()
     def _member_probs(self, rec, img_tensor):
@@ -124,7 +112,7 @@ class EnsembleRecognizer:
             },
         }
 
-    # ---------- 单张推理 ----------
+    # 单张推理 
 
     @torch.no_grad()
     def recognize(self, image: Image.Image, tta: bool = False) -> dict:
@@ -171,15 +159,9 @@ class EnsembleRecognizer:
         probs = 0.55 * member_probs[0] + 0.45 * member_probs[1]
         return self._build_result(probs, member_probs)
 
-    # ---------- 带 Grad-CAM ----------
-
+    # Grad-CAM 
     def predict_with_cam(self, image: Image.Image, tta: bool = False) -> dict:
         """带 Grad-CAM 热力图的集成识别。
-
-        注意：本方法不能加 @torch.no_grad()——Grad-CAM 需要反向传播计算梯度。
-        热力图用"代表成员"模型解释集成的最终类别：
-        - 优先选与集成 top1 一致的成员模型；
-        - 若两模型都不支持集成结论（罕见），用第一个成员模型。
         evidence 结构与 CalligrapherRecognizer.predict_with_cam 保持一致。
         """
         self._load()
@@ -265,7 +247,6 @@ class EnsembleRecognizer:
 
         return result
 
-    # ---------- 批量推理 ----------
 
     @torch.no_grad()
     def recognize_batch(self, images: list, tta: bool = False) -> list:
@@ -276,7 +257,7 @@ class EnsembleRecognizer:
         return [self.recognize(img, tta=tta) for img in images]
 
 
-# ====================== 应用测试 ======================
+# 应用测试
 
 if __name__ == "__main__":
     import os
